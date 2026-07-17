@@ -21,7 +21,6 @@ interface ServerToClientEvents {
 }
 
 interface ClientToServerEvents {
-  join: (data: { userId: number }) => void;
   joinConversation: (data: { conversationId: number }) => void;
   leaveConversation: (data: { conversationId: number }) => void;
   sendMessage: (data: {
@@ -53,8 +52,8 @@ export function useSocket() {
     };
   }, []);
 
-  const join = useCallback((userId: number) => {
-    socketRef.current?.emit("join", { userId });
+  const join = useCallback((_userId: number) => {
+    socketRef.current?.connect();
   }, []);
 
   const joinConversation = useCallback((conversationId: number) => {

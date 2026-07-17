@@ -12,10 +12,7 @@ const envSchema = z.object({
 });
 
 export const env = envSchema.parse(process.env);
-
-export function isProduction() {
-  return env.NODE_ENV === "production";
-}
+export const isProduction = env.NODE_ENV === "production";
 
 export function getPort() {
   return parseInt(env.PORT, 10);
