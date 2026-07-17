@@ -1,6 +1,5 @@
-import { getSessionToken } from "./session";
+import { createSessionToken, getSessionToken, verifySessionToken } from "./session";
 import { findUserByUnionId, upsertUser } from "../queries/users";
-import { getDb } from "../queries/connection";
 
 export async function authenticateRequest(headers: Headers) {
   const sessionToken = getSessionToken(headers);
@@ -8,16 +7,10 @@ export async function authenticateRequest(headers: Headers) {
     return undefined;
   }
 
-  const db = getDb();
-
-  // Verify the session token and get user info
-  // This is a simplified version - you'd typically verify the JWT here
   try {
-    const sessionData = JSON.parse(
-      Buffer.from(sessionToken.split(".")[1] || "", "base64").toString()
-    );
+    const sessionData = verifySessionToken(sessionToken);
 
-    if (sessionData.unionId) {
+    if (sessionData?.unionId) {
       const user = await findUserByUnionId(sessionData.unionId);
       return user || undefined;
     }
@@ -32,7 +25,6 @@ export function createOAuthCallbackHandler() {
   return async (c: { req: { raw: Request }; json: (data: unknown, status?: number) => Response }) => {
     const url = new URL(c.req.raw.url);
     const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
 
     if (!code) {
       return c.json({ error: "Missing authorization code" }, 400);
@@ -95,22 +87,19 @@ export function createOAuthCallbackHandler() {
       }
 
       // Create session token
-      const sessionToken = Buffer.from(
-        JSON.stringify({
+      const sessionToken = createSessionToken({
           userId: user.id,
           unionId: user.unionId,
-          name: user.name,
-          email: user.email,
-          iat: Date.now(),
-        })
-      ).toString("base64");
+          name: user.name || "User",
+          email: user.email || undefined,
+      });
 
       // Set cookie and redirect
       return new Response(null, {
         status: 302,
         headers: {
           Location: "/",
-          "Set-Cookie": `session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
+          "Set-Cookie": `alice_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
         },
       });
     } catch (error) {

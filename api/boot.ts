@@ -13,6 +13,10 @@ const app = new Hono<{ Bindings: HttpBindings }>();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.get(Paths.oauthCallback, createOAuthCallbackHandler());
+app.get("/api/logout", (c) => new Response(null, {
+  status: 302,
+  headers: { Location: "/login", "Set-Cookie": "alice_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" },
+}));
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
@@ -25,8 +29,7 @@ app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 export default app;
 
-if (env.isProduction) {
-  const { serve } = await import("@hono/node-server");
+if (env.NODE_ENV === "production") {
   const { serveStaticFiles } = await import("./lib/vite");
   const { createServer } = await import("http");
 

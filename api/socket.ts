@@ -3,18 +3,19 @@ import { Server as SocketIOServer, Socket } from "socket.io";
 import { getDb } from "./queries/connection";
 import { messages, messageReads, conversationParticipants } from "@db/schema";
 import { eq, and } from "drizzle-orm";
+import { authenticateRequest } from "./kimi/auth";
 
 let io: SocketIOServer | null = null;
 
 // Track online users
-const onlineUsers = new Map<number, string>(); // userId -> socketId
+const onlineUsers = new Map<number, Set<string>>();
 
 export function getIO() {
   return io;
 }
 
 export function getOnlineUsers() {
-  return new Map(onlineUsers);
+  return new Map(Array.from(onlineUsers, ([id, sockets]) => [id, new Set(sockets)]));
 }
 
 export function initSocket(server: HttpServer) {
@@ -26,25 +27,44 @@ export function initSocket(server: HttpServer) {
     path: "/socket.io",
   });
 
+  io.use(async (socket, next) => {
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(socket.handshake.headers)) {
+      if (typeof value === "string") headers.set(key, value);
+    }
+    const user = await authenticateRequest(headers);
+    if (!user) return next(new Error("Unauthorized"));
+    socket.data.userId = user.id;
+    next();
+  });
+
   io.on("connection", (socket: Socket) => {
     console.log("Socket connected:", socket.id);
 
-    // User joins with their userId
-    socket.on("join", ({ userId }: { userId: number }) => {
-      onlineUsers.set(userId, socket.id);
-      socket.data.userId = userId;
-      socket.join(`user_${userId}`);
+    const userId = socket.data.userId as number;
+    const sockets = onlineUsers.get(userId) ?? new Set<string>();
+    const wasOffline = sockets.size === 0;
+    sockets.add(socket.id);
+    onlineUsers.set(userId, sockets);
+    socket.join(`user_${userId}`);
 
-      // Broadcast online status to contacts
+    if (wasOffline) {
       socket.broadcast.emit("userOnline", { userId });
+    }
+    socket.emit("onlineUsers", Array.from(onlineUsers.keys()));
 
-      // Send current online users to the new user
-      socket.emit("onlineUsers", Array.from(onlineUsers.keys()));
-    });
+    const isParticipant = async (conversationId: number) => {
+      const [participant] = await getDb().select({ id: conversationParticipants.id })
+        .from(conversationParticipants).where(and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.userId, userId),
+        )).limit(1);
+      return Boolean(participant);
+    };
 
     // Join a conversation room
-    socket.on("joinConversation", ({ conversationId }: { conversationId: number }) => {
-      socket.join(`conv_${conversationId}`);
+    socket.on("joinConversation", async ({ conversationId }: { conversationId: number }) => {
+      if (await isParticipant(conversationId)) socket.join(`conv_${conversationId}`);
     });
 
     // Leave a conversation room
@@ -138,6 +158,7 @@ export function initSocket(server: HttpServer) {
         try {
           const userId = socket.data.userId;
           if (!userId || !data.messageIds.length) return;
+          if (!(await isParticipant(data.conversationId))) return;
 
           const db = getDb();
 
@@ -166,7 +187,8 @@ export function initSocket(server: HttpServer) {
     // Typing indicator
     socket.on(
       "typing",
-      (data: { conversationId: number; isTyping: boolean }) => {
+      async (data: { conversationId: number; isTyping: boolean }) => {
+        if (!(await isParticipant(data.conversationId))) return;
         socket.to(`conv_${data.conversationId}`).emit("userTyping", {
           userId: socket.data.userId,
           conversationId: data.conversationId,
@@ -177,8 +199,9 @@ export function initSocket(server: HttpServer) {
 
     // Disconnect
     socket.on("disconnect", () => {
-      const userId = socket.data.userId;
-      if (userId) {
+      const userSockets = onlineUsers.get(userId);
+      userSockets?.delete(socket.id);
+      if (!userSockets?.size) {
         onlineUsers.delete(userId);
         socket.broadcast.emit("userOffline", { userId });
       }
