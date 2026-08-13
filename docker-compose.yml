@@ -1,0 +1,60 @@
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-alice_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-alice_chains}
+      MYSQL_USER: ${MYSQL_USER:-alice}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-alice_pw}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-alice_root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Applies pending migrations, then exits. The app waits on this completing.
+  migrate:
+    build:
+      context: .
+      target: build
+    environment:
+      DATABASE_URL: mysql://${MYSQL_USER:-alice}:${MYSQL_PASSWORD:-alice_pw}@db:3306/${MYSQL_DATABASE:-alice_chains}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["npx", "drizzle-kit", "migrate"]
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runtime
+      args:
+        VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL:?set VITE_KIMI_AUTH_URL in .env}
+        VITE_APP_ID: ${VITE_APP_ID:?set VITE_APP_ID in .env}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: mysql://${MYSQL_USER:-alice}:${MYSQL_PASSWORD:-alice_pw}@db:3306/${MYSQL_DATABASE:-alice_chains}
+      VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL}
+      VITE_APP_ID: ${VITE_APP_ID}
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      OWNER_UNION_ID: ${OWNER_UNION_ID:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db_data:

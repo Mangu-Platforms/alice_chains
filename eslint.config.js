@@ -4,6 +4,13 @@ import tseslint from "typescript-eslint";
 import pluginReact from "eslint-plugin-react";
 
 export default [
+  // Flat config only ignores node_modules/.git by default, so build output must
+  // be excluded explicitly. Without this, running lint after any build lints the
+  // bundled dist/boot.js and reports ~1900 errors. CI only avoided it because
+  // lint runs before build.
+  {
+    ignores: ["dist/**", "db/migrations/**", "coverage/**", "*.tsbuildinfo"],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
