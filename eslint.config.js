@@ -37,6 +37,15 @@ export default [
     },
   },
   {
+    // The service worker runs in its own global scope: `self`, `clients` and
+    // the registration APIs are built-ins there and undefined everywhere else.
+    files: ["public/**/*.js"],
+    languageOptions: {
+      globals: { ...globals.serviceworker },
+      sourceType: "script",
+    },
+  },
+  {
     // S-5. `sql`... IN (${ids.join(",")})`` binds the joined string as a SINGLE
     // parameter, so `IN (?)` receives "11,12,13" and MySQL coerces it to 11.
     // Read receipts silently came back for one message per page. Use Drizzle's

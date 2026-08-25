@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { trpc } from "@/providers/trpc";
 import { useNavigate } from "react-router";
 import {
@@ -24,6 +25,8 @@ import {
   SmilePlus,
   Reply,
   FileText,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,6 +65,9 @@ export default function Chat() {
     : null;
 
   const socket = useSocket();
+  // F-6. Permission is requested from a control the member pressed, never on
+  // load — a prompt fired at arrival is the fastest route to a permanent no.
+  const push = usePushNotifications();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");

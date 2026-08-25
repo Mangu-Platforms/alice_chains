@@ -60,6 +60,14 @@ const envSchema = z.object({
   // MinIO serves path-style (http://host/bucket/key); AWS prefers virtual-host
   // style. Wrong choice here produces a signature mismatch, not a 404, so it
   // is explicit rather than guessed.
+  // ─── Web push (F-6) ────────────────────────────────────────────────────
+  // Generate a pair with `npm run generate-vapid`. With these unset the app
+  // runs exactly as before and simply sends no notifications — push is opt-in,
+  // not a startup requirement.
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().default("mailto:admin@example.com"),
+
   S3_FORCE_PATH_STYLE: z
     .enum(["true", "false"])
     .default("true")
@@ -111,6 +119,15 @@ export const env = envSchema.parse(process.env);
 
 // Fail at boot rather than on the first upload: an operator who selects the s3
 // driver and forgets a credential should learn immediately.
+// Half a VAPID pair is a configuration mistake that would otherwise surface as
+// notifications silently never arriving.
+if (Boolean(env.VAPID_PUBLIC_KEY) !== Boolean(env.VAPID_PRIVATE_KEY)) {
+  throw new Error(
+    "VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together. " +
+      "Generate a pair with: npm run generate-vapid"
+  );
+}
+
 if (env.STORAGE_DRIVER === "s3") {
   const missing = (
     ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"] as const

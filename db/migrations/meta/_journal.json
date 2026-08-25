@@ -43,6 +43,13 @@
       "when": 1787689452850,
       "tag": "0005_rapid_mandrill",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1787690302282,
+      "tag": "0006_jazzy_blackheart",
+      "breakpoints": true
     }
   ]
 }

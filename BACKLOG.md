@@ -44,7 +44,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-7** | Integration and socket test harness — MySQL service container, fixture factories, ≥ 25 meaningful assertions | P0 | S-3 | ✅ Done — 169 assertions, green on 3 consecutive runs |
 | **S-12** | CI: integration services, migrations before the suite, coverage published, `validate` a required check on `main` | P0 | S-7 | ✅ Done, with two carve-outs — see S-12a and S-12b |
 
-## Wave 4 — Phase 2 features
+## Wave 4 — Phase 2 features ✅
 
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
@@ -53,7 +53,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **F-3** | Emoji reactions | P1 | S-3 | ✅ Done |
 | **F-4** | File & image attachments (MinIO locally; no account needed) | P1 | S-3, S-6 | ✅ Done — filesystem driver by default, S3/MinIO behind `STORAGE_DRIVER=s3` |
 | **F-5** | Reply threading UI | P1 | S-3 | ✅ Done — also closes FR-MSG-15 |
-| **F-6** | Web push notifications (self-generated VAPID keys locally) | P1 | S-3 | Not started |
+| **F-6** | Web push notifications (self-generated VAPID keys locally) | P1 | S-3 | ✅ Done |
 | **F-7** | Group management — rename, avatar, add/remove participants, leave, ownership transfer | P2 | S-3, S-8, S-9 | ✅ Done |
 | **F-8** | Blocking semantics end to end — one `isBlockedBetween` predicate enforced across conversation creation, message send, search, contacts and presence; `contact.block`/`unblock` | P1 | S-3, S-9, S-10 | ✅ Done |
 

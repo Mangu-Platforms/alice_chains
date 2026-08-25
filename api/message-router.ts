@@ -13,6 +13,7 @@ import {
 } from "./lib/authz";
 import { emitToConversation, emitToMembers } from "./lib/realtime";
 import { attachToMessage, attachmentsForMessages } from "./attachment-router";
+import { notifyNewMessage } from "./lib/push/notify";
 import { messages, messageReactions, messageReads, users } from "@db/schema";
 import { MAX_MESSAGE_LENGTH, MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
@@ -251,6 +252,18 @@ export const messageRouter = createRouter({
       for (const attachmentId of attachmentIds) {
         await attachToMessage(attachmentId, stored.id, userId, db);
       }
+
+      // F-6. Fire and forget: a push service being slow must not slow down a
+      // message send, and `notifyNewMessage` never throws.
+      void notifyNewMessage({
+        conversationId: input.conversationId,
+        senderId: userId,
+        senderName: ctx.user.name,
+        conversationName: null,
+        isGroup: false,
+        content: input.content,
+        hasAttachment: attachmentIds.length > 0,
+      });
 
       return { ...stored, isMine: true };
     }),

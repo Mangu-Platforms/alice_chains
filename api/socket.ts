@@ -1,9 +1,10 @@
 import type { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { TRPCError } from "@trpc/server";
+import { notifyNewMessage } from "./lib/push/notify";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
-import { messageReads, conversationParticipants } from "@db/schema";
+import { messageReads, conversationParticipants, conversations, users } from "@db/schema";
 import { eq, sql } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
 import { getSessionToken, verifySessionToken } from "./kimi/session";
@@ -202,6 +203,19 @@ export function initSocket(server: HttpServer) {
             return;
           }
 
+          // Loaded once for the notification: the group's name and the
+          // sender's, so the notification can say where to look.
+          const [conversationMeta] = await getDb()
+            .select({
+              conversationName: conversations.name,
+              isGroup: sql<boolean>`${conversations.type} = 'group'`,
+              senderName: users.name,
+            })
+            .from(conversations)
+            .leftJoin(users, eq(users.id, userId))
+            .where(eq(conversations.id, data.conversationId))
+            .limit(1);
+
           if (message) {
             // Broadcast to all participants in the conversation
             io?.to(`conv_${data.conversationId}`).emit("newMessage", {
@@ -223,6 +237,17 @@ export function initSocket(server: HttpServer) {
                 lastMessage: message,
               });
             }
+
+            // F-6. Everyone in the conversation who is not connected right now.
+            void notifyNewMessage({
+              conversationId: data.conversationId,
+              senderId: userId,
+              senderName: conversationMeta?.senderName ?? null,
+              conversationName: conversationMeta?.conversationName ?? null,
+              isGroup: conversationMeta?.isGroup ?? false,
+              content: data.content,
+              hasAttachment: false,
+            });
           }
         } catch (error) {
           console.error("Error sending message:", error);

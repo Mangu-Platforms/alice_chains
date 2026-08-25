@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "validate": "npm run typecheck && npm test && npm run lint && npm run build",
-    "db:verify-migration": "node scripts/verify-constraint-migration.mjs"
+    "db:verify-migration": "node scripts/verify-constraint-migration.mjs",
+    "generate-vapid": "node scripts/generate-vapid.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.8",

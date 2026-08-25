@@ -18,3 +18,19 @@ process.env.VITE_APP_ID ??= "test-app";
 process.env.APP_SECRET ??= "test-app-secret-at-least-32-bytes-long!!";
 process.env.JWT_SECRET ??= "test-signing-secret-at-least-32-bytes!!";
 process.env.PUBLIC_BASE_URL ??= "http://localhost:3000";
+
+/**
+ * A VAPID pair for the push suite.
+ *
+ * `api/lib/env.ts` parses `process.env` at import time, so setting these in a
+ * `beforeEach` is too late — `pushIsConfigured()` would already have decided
+ * push was off and every delivery test would silently pass by doing nothing.
+ * Generated per run rather than hard-coded, so nothing here resembles a key
+ * anyone might paste into a real deployment.
+ */
+const { createECDH } = await import("node:crypto");
+const vapid = createECDH("prime256v1");
+vapid.generateKeys();
+process.env.VAPID_PUBLIC_KEY ??= vapid.getPublicKey().toString("base64url");
+process.env.VAPID_PRIVATE_KEY ??= vapid.getPrivateKey().toString("base64url");
+process.env.VAPID_SUBJECT ??= "mailto:test@example.test";

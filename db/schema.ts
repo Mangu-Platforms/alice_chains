@@ -282,6 +282,42 @@ export const attachments = mysqlTable(
 
 export type Attachment = typeof attachments.$inferSelect;
 
+// ─── Push Subscriptions (F-6) ─────────────────────────────────────────────
+//
+// `p256dh` and `auth` are Web Push keying material and are secrets: anyone
+// holding them can send a notification to that browser. They are never
+// returned by any procedure.
+export const pushSubscriptions = mysqlTable(
+  "push_subscriptions",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // 512 chars so it can carry a unique index: MySQL 8 InnoDB's utf8mb4 index
+    // limit is 3072 bytes and 512 x 4 = 2048.
+    endpoint: varchar("endpoint", { length: 512 }).notNull(),
+    p256dh: varchar("p256dh", { length: 255 }).notNull(),
+    auth: varchar("auth", { length: 255 }).notNull(),
+    userAgent: varchar("userAgent", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    lastUsedAt: timestamp("lastUsedAt"),
+    // Drives pruning after repeated rejections from the push service.
+    failureCount: bigint("failureCount", { mode: "number", unsigned: true })
+      .default(0)
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("push_subscriptions_endpoint_uq").on(t.endpoint),
+    index("push_subscriptions_user_idx").on(t.userId),
+    foreignKey({
+      name: "push_subscriptions_userId_users_id_fk",
+      columns: [t.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"),
+  ]
+);
+
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+
 // ─── Contacts (Friend relationships) ──────────────────────────────
 export const contacts = mysqlTable(
   "contacts",
