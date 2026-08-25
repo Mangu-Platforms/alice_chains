@@ -24,7 +24,20 @@ It is a **Phase 1 platform under active stabilization**. The messaging core is r
 ```bash
 git clone https://github.com/Mangu-Platforms/alice_chains.git
 cd alice_chains
+./scripts/dev.sh              # client → http://localhost:3000, API → :3001
+```
 
+`scripts/dev.sh` checks your Node version, writes a `.env` with freshly
+generated secrets if you have none, installs from the lockfile, brings MySQL up
+and waits for it to be genuinely ready, migrates, and starts both dev servers.
+It is idempotent. `SKIP_DB=1` uses a MySQL you already have.
+
+Then `npm run db:seed` for two demo accounts, a direct conversation and a
+group — no OAuth provider needed.
+
+By hand, if you would rather see every step:
+
+```bash
 cp .env.example .env          # fill in your OAuth values
 npm ci                        # lockfile is committed — do not use `npm install`
 
@@ -44,6 +57,7 @@ docker compose up             # app on http://localhost:3000
 
 | Script | Does |
 |---|---|
+| `npm run dev:up` | **from a clean clone to a running app** — `.env`, install, database, migrations, dev servers |
 | `npm run dev` | Vite client on :3000 + API on :3001, both watching |
 | `npm run build` | typecheck, build the client to `dist/public`, bundle the server to `dist/boot.js` |
 | `npm start` | run the production build (single process, serves client + API) |

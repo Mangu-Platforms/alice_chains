@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "tsx watch api/boot.ts",
+    "dev:up": "bash scripts/dev.sh",
+    "dev:server": "tsx watch --env-file-if-exists=.env api/boot.ts",
     "dev:client": "vite",
     "build": "tsc && vite build && esbuild api/boot.ts --platform=node --bundle --format=esm --outdir=dist --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",
-    "start": "node dist/boot.js",
+    "start": "node --env-file-if-exists=.env dist/boot.js",
     "check": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
@@ -20,7 +21,7 @@
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "validate": "npm run typecheck && npm test && npm run lint && npm run check:a11y && npm run build && npm run check:bundle",
-    "db:verify-migration": "node scripts/verify-constraint-migration.mjs",
+    "db:verify-migration": "node --env-file-if-exists=.env scripts/verify-constraint-migration.mjs",
     "generate-vapid": "node scripts/generate-vapid.mjs",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "check:a11y": "node scripts/check-a11y-labels.mjs"

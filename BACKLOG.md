@@ -90,7 +90,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 
 | ID | Title | Pri | Status |
 |---|---|---|---|
-| **P-TOOL-1** | `scripts/dev.sh` — compose db, migrate, dev | P1 | Not started |
+| **P-TOOL-1** | `scripts/dev.sh` — compose db, migrate, dev | P1 | ✅ Done — and fixed the fact that nothing loaded `.env` |
 | **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | Not started |
 | **P-TOOL-3** | `/healthz` and `/readyz` (readiness touches MySQL) | P1 | ✅ Done — with S-15 |
 | **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | ✅ Done — with S-15 |
