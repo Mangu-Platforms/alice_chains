@@ -73,3 +73,9 @@ export const MIN_SECRET_LENGTH = 32;
 
 /** Most conversations one `conversation.list` call returns. */
 export const CONVERSATION_LIST_LIMIT = 50;
+
+/**
+ * Longest message body accepted. Enforced on the tRPC path today; S-14 brings
+ * the socket path — which is the one the UI actually uses — to the same cap.
+ */
+export const MAX_MESSAGE_LENGTH = 4000;

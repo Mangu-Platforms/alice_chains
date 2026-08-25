@@ -18,6 +18,15 @@ interface ServerToClientEvents {
   userOffline: (data: { userId: number }) => void;
   onlineUsers: (userIds: number[]) => void;
   messageError: (data: { error: string }) => void;
+  /** F-2. Emitted by the server after a tRPC edit. */
+  messageUpdated: (data: {
+    id: number;
+    conversationId: number;
+    content: string;
+    isEdited: boolean;
+  }) => void;
+  /** F-2. Emitted by the server after a tRPC soft delete. */
+  messageDeleted: (data: { id: number; conversationId: number }) => void;
   /**
    * The server found this connection's session revoked or expired and is about
    * to close it (S-17). Sent before the disconnect so the client can say
@@ -187,6 +196,33 @@ export function useSocket() {
     []
   );
 
+  const onMessageUpdated = useCallback(
+    (
+      handler: (data: {
+        id: number;
+        conversationId: number;
+        content: string;
+        isEdited: boolean;
+      }) => void
+    ) => {
+      socketRef.current?.on("messageUpdated", handler);
+      return () => {
+        socketRef.current?.off("messageUpdated", handler);
+      };
+    },
+    []
+  );
+
+  const onMessageDeleted = useCallback(
+    (handler: (data: { id: number; conversationId: number }) => void) => {
+      socketRef.current?.on("messageDeleted", handler);
+      return () => {
+        socketRef.current?.off("messageDeleted", handler);
+      };
+    },
+    []
+  );
+
   return {
     socket: socketRef.current,
     join,
@@ -202,5 +238,7 @@ export function useSocket() {
     onUserOffline,
     onOnlineUsers,
     onConversationUpdated,
+    onMessageUpdated,
+    onMessageDeleted,
   };
 }

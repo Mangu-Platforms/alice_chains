@@ -61,6 +61,10 @@ export const conversationRouter = createRouter({
                ROW_NUMBER() OVER (PARTITION BY m.conversationId ORDER BY m.id DESC) rn
         FROM messages m
         JOIN my ON my.conversationId = m.conversationId
+        -- F-2. History keeps tombstones so a reply chain holds its shape, but
+        -- the sidebar preview must not: showing an empty bubble as the last
+        -- message is worse than showing the one before it.
+        WHERE m.deletedAt IS NULL
       )
       SELECT c.id, c.name, c.type, c.avatar, c.createdAt, c.updatedAt,
              lm.content        AS lastMessageContent,
@@ -68,6 +72,7 @@ export const conversationRouter = createRouter({
              lm.senderId       AS lastMessageSenderId,
              (SELECT COUNT(*) FROM messages um
                 WHERE um.conversationId = c.id
+                  AND um.deletedAt IS NULL
                   AND um.senderId <> ${userId}
                   AND um.createdAt > COALESCE(my.lastReadAt, '1970-01-02')) AS unreadCount
       FROM conversations c

@@ -19,6 +19,8 @@ import {
   UserPlus,
   Menu,
   X,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +33,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { format } from "date-fns";
+import { toast } from "sonner";
+import { MAX_MESSAGE_LENGTH } from "@contracts/constants";
 
 export default function Chat() {
   const { user, logout } = useAuth();
@@ -47,6 +51,10 @@ export default function Chat() {
   const [isMobile, setIsMobile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
+  // F-2. The message currently being edited in place, and its draft body.
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
 
   // tRPC queries
@@ -85,6 +93,48 @@ export default function Chat() {
     markActiveConversationRead();
   }, [markActiveConversationRead]);
 
+  const editMessage = trpc.message.edit.useMutation({
+    onSuccess: () => {
+      setEditingMessageId(null);
+      setEditDraft("");
+      refetchMessages();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const deleteMessage = trpc.message.delete.useMutation({
+    onSuccess: () => {
+      setPendingDeleteId(null);
+      refetchMessages();
+      refetchConversations();
+    },
+    onError: (error) => {
+      setPendingDeleteId(null);
+      toast.error(error.message);
+    },
+  });
+
+  const startEditing = (id: number, content: string) => {
+    setEditingMessageId(id);
+    setEditDraft(content);
+  };
+
+  const cancelEditing = () => {
+    setEditingMessageId(null);
+    setEditDraft("");
+  };
+
+  const submitEdit = () => {
+    const content = editDraft.trim();
+    if (!editingMessageId) return;
+    if (!content) {
+      toast.error("A message cannot be empty. Delete it instead.");
+      return;
+    }
+    editMessage.mutate({ messageId: editingMessageId, content });
+  };
+
   // Join socket room for active conversation
   useEffect(() => {
     if (activeConversationId && user) {
@@ -119,6 +169,23 @@ export default function Chat() {
     user,
     markActiveConversationRead,
   ]);
+
+  // F-2. Edits and deletes originate on the tRPC path and are fanned out by
+  // the server, so an open client converges without polling.
+  useEffect(() => {
+    const cleanupUpdated = socket.onMessageUpdated((data) => {
+      if (data.conversationId === activeConversationId) refetchMessages();
+    });
+    const cleanupDeleted = socket.onMessageDeleted((data) => {
+      if (data.conversationId === activeConversationId) refetchMessages();
+      // The sidebar preview may have been that message.
+      refetchConversations();
+    });
+    return () => {
+      cleanupUpdated();
+      cleanupDeleted();
+    };
+  }, [activeConversationId, socket, refetchMessages, refetchConversations]);
 
   // Listen for conversation updates
   useEffect(() => {
@@ -503,7 +570,7 @@ export default function Chat() {
                           !msg.isMine && <div className="w-7 flex-shrink-0" />
                         )}
                         <div
-                          className={`px-4 py-2 text-sm leading-relaxed ${
+                          className={`group px-4 py-2 text-sm leading-relaxed ${
                             msg.isMine
                               ? "message-bubble-mine"
                               : "message-bubble-theirs"
@@ -514,7 +581,51 @@ export default function Chat() {
                               {msg.senderName}
                             </p>
                           )}
-                          <p>{msg.content}</p>
+                          {msg.deletedAt ? (
+                            <p className="italic opacity-60">Message deleted</p>
+                          ) : editingMessageId === msg.id ? (
+                            <div className="space-y-2">
+                              <Input
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    submitEdit();
+                                  }
+                                  if (e.key === "Escape") cancelEditing();
+                                }}
+                                maxLength={MAX_MESSAGE_LENGTH}
+                                aria-label="Edit message"
+                                autoFocus
+                                className="h-8 bg-background/40 border-0"
+                              />
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={submitEdit}
+                                  disabled={editMessage.isPending}
+                                >
+                                  {editMessage.isPending ? "Saving…" : "Save"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={cancelEditing}
+                                  disabled={editMessage.isPending}
+                                >
+                                  Cancel
+                                </Button>
+                                <span className="text-[10px] opacity-60">
+                                  Enter to save · Esc to cancel
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <p>{msg.content}</p>
+                          )}
                           <div
                             className={`flex items-center gap-1 mt-1 ${
                               msg.isMine ? "justify-end" : "justify-start"
@@ -523,7 +634,10 @@ export default function Chat() {
                             <span className="text-[10px] opacity-60">
                               {format(new Date(msg.createdAt), "HH:mm")}
                             </span>
-                            {msg.isMine && (
+                            {msg.isEdited && !msg.deletedAt && (
+                              <span className="text-[10px] opacity-60">edited</span>
+                            )}
+                            {msg.isMine && !msg.deletedAt && (
                               <span className="opacity-60">
                                 {msg.readBy && msg.readBy.length > 0 ? (
                                   <CheckCheck className="w-3 h-3" />
@@ -532,6 +646,42 @@ export default function Chat() {
                                 )}
                               </span>
                             )}
+                            {msg.isMine &&
+                              !msg.deletedAt &&
+                              editingMessageId !== msg.id && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
+                                      aria-label="Message actions"
+                                    >
+                                      <MoreVertical className="w-3 h-3" />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      className="gap-2"
+                                      onClick={() => startEditing(msg.id, msg.content)}
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                      Edit
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="gap-2 text-destructive"
+                                      onClick={() => {
+                                        setPendingDeleteId(msg.id);
+                                        deleteMessage.mutate({ messageId: msg.id });
+                                      }}
+                                      disabled={pendingDeleteId === msg.id}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      {pendingDeleteId === msg.id
+                                        ? "Deleting…"
+                                        : "Delete"}
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
                           </div>
                         </div>
                       </div>

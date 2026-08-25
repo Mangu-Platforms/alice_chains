@@ -3,9 +3,44 @@ import { eq, desc, inArray, sql } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
+import { TRPCError } from "@trpc/server";
 import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
+import { emitToConversation, emitToMembers } from "./lib/realtime";
 import { messages, messageReads, users } from "@db/schema";
-import { MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
+import { MAX_MESSAGE_LENGTH, MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
+
+/**
+ * Resolve a message the caller is allowed to modify.
+ *
+ * Editing and deleting are owner-only — being a participant is not enough. A
+ * message that is already deleted cannot be edited or re-deleted, and a message
+ * belonging to someone else is refused exactly like one that does not exist, so
+ * the endpoint is not an id-probing oracle.
+ */
+async function assertOwnMessage(
+  userId: number,
+  messageId: number,
+  db = getDb()
+): Promise<{ conversationId: number }> {
+  const [message] = await db
+    .select({
+      senderId: messages.senderId,
+      conversationId: messages.conversationId,
+      deletedAt: messages.deletedAt,
+    })
+    .from(messages)
+    .where(eq(messages.id, messageId))
+    .limit(1);
+
+  if (!message || message.senderId !== userId || message.deletedAt) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You cannot modify this message",
+    });
+  }
+
+  return { conversationId: message.conversationId };
+}
 
 export const messageRouter = createRouter({
   listByConversation: authedQuery
@@ -34,6 +69,10 @@ export const messageRouter = createRouter({
           fileUrl: messages.fileUrl,
           replyToId: messages.replyToId,
           isEdited: messages.isEdited,
+          // A deleted message is returned as a tombstone rather than omitted,
+          // so a reply chain keeps its shape and the client can render
+          // "message deleted" in place. `content` was blanked at delete time.
+          deletedAt: messages.deletedAt,
           createdAt: messages.createdAt,
           senderName: users.name,
           senderAvatar: users.avatar,
@@ -41,7 +80,11 @@ export const messageRouter = createRouter({
         .from(messages)
         .leftJoin(users, eq(messages.senderId, users.id))
         .where(eq(messages.conversationId, input.conversationId))
-        .orderBy(desc(messages.createdAt))
+        // FR-MSG-11. `createdAt` alone is not a deterministic order: MySQL
+        // TIMESTAMP here has one-second resolution, so messages sent within the
+        // same second sorted arbitrarily and could swap places between two
+        // fetches. `id` is monotonic and breaks the tie.
+        .orderBy(desc(messages.createdAt), desc(messages.id))
         .limit(input.limit)
         .offset(input.offset);
 
@@ -81,7 +124,7 @@ export const messageRouter = createRouter({
     .input(
       z.object({
         conversationId: z.number(),
-        content: z.string().min(1).max(4000),
+        content: z.string().min(1).max(MAX_MESSAGE_LENGTH),
         type: z.enum(["text", "image", "file"]).default("text"),
         fileUrl: z.string().optional(),
         replyToId: z.number().optional(),
@@ -105,6 +148,66 @@ export const messageRouter = createRouter({
       });
 
       return { ...stored, isMine: true };
+    }),
+
+  edit: authedQuery
+    .input(
+      z.object({
+        messageId: z.number().int().positive(),
+        content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const message = await assertOwnMessage(ctx.user.id, input.messageId, db);
+
+      await db
+        .update(messages)
+        .set({ content: input.content, isEdited: true })
+        .where(eq(messages.id, input.messageId));
+
+      const payload = {
+        id: input.messageId,
+        conversationId: message.conversationId,
+        content: input.content,
+        isEdited: true,
+      };
+
+      // Closes part of the getIO()-has-no-call-sites defect: a tRPC mutation
+      // that changes conversation state now reaches open clients.
+      emitToConversation(message.conversationId, "messageUpdated", payload);
+      await emitToMembers(message.conversationId, "conversationUpdated", {
+        conversationId: message.conversationId,
+      });
+
+      return payload;
+    }),
+
+  delete: authedQuery
+    .input(z.object({ messageId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const message = await assertOwnMessage(ctx.user.id, input.messageId, db);
+
+      // Soft: the row survives so the thread keeps its shape, but `content` is
+      // blanked in the same statement so the body is not retrievable from the
+      // tombstone.
+      await db
+        .update(messages)
+        .set({ content: "", deletedAt: new Date(), deletedBy: ctx.user.id })
+        .where(eq(messages.id, input.messageId));
+
+      const payload = {
+        id: input.messageId,
+        conversationId: message.conversationId,
+      };
+
+      emitToConversation(message.conversationId, "messageDeleted", payload);
+      await emitToMembers(message.conversationId, "conversationUpdated", {
+        conversationId: message.conversationId,
+      });
+
+      return payload;
     }),
 
   markAsRead: authedQuery

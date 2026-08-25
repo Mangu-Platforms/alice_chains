@@ -114,6 +114,12 @@ export const messages = mysqlTable(
     fileUrl: text("fileUrl"),
     replyToId: bigint("replyToId", { mode: "number", unsigned: true }),
     isEdited: boolean("isEdited").default(false).notNull(),
+    // F-2. Deletion is soft: the row survives as a tombstone so a reply chain
+    // keeps its shape and clients can render "message deleted" without a full
+    // refetch. `content` is blanked at delete time, so the body is not
+    // retrievable even though the row is.
+    deletedAt: timestamp("deletedAt"),
+    deletedBy: bigint("deletedBy", { mode: "number", unsigned: true }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt")
       .defaultNow()
@@ -122,6 +128,13 @@ export const messages = mysqlTable(
   },
   (t) => [
     index("messages_conversation_created_idx").on(t.conversationId, t.createdAt), // IX-1
+    // Serves the paths that must skip tombstones: the sidebar's last-message
+    // projection and the unread count.
+    index("messages_conversation_active_idx").on(
+      t.conversationId,
+      t.deletedAt,
+      t.createdAt
+    ),
     index("messages_sender_idx").on(t.senderId), // IX-6
     index("messages_replyTo_idx").on(t.replyToId),
     foreignKey({
@@ -142,6 +155,13 @@ export const messages = mysqlTable(
       name: "messages_replyToId_messages_id_fk",
       columns: [t.replyToId],
       foreignColumns: [t.id as AnyMySqlColumn],
+    }).onDelete("set null"),
+    // SET NULL, not RESTRICT: who deleted a message is useful provenance, but
+    // it must not keep an account alive.
+    foreignKey({
+      name: "messages_deletedBy_users_id_fk",
+      columns: [t.deletedBy],
+      foreignColumns: [users.id],
     }).onDelete("set null"),
   ]
 );
