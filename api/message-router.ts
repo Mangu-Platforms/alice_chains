@@ -1,13 +1,14 @@
 import { z } from "zod";
-import { eq, desc, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
 import { TRPCError } from "@trpc/server";
 import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
 import { emitToConversation, emitToMembers } from "./lib/realtime";
-import { messages, messageReads, users } from "@db/schema";
+import { messages, messageReactions, messageReads, users } from "@db/schema";
 import { MAX_MESSAGE_LENGTH, MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
+import { REACTION_EMOJI } from "@contracts/reactions";
 
 /**
  * Resolve a message the caller is allowed to modify.
@@ -40,6 +41,60 @@ async function assertOwnMessage(
   }
 
   return { conversationId: message.conversationId };
+}
+
+export interface ReactionSummary {
+  emoji: string;
+  count: number;
+  /** Whether the caller is one of the reactors — drives the "on" state. */
+  mine: boolean;
+  userIds: number[];
+}
+
+/**
+ * Group reactions by message and emoji.
+ *
+ * One query for a whole page rather than one per message: the history endpoint
+ * returns up to 100 messages and a per-message round trip would dominate it.
+ */
+async function reactionsFor(
+  messageIds: number[],
+  viewerId: number,
+  db = getDb()
+): Promise<Map<number, ReactionSummary[]>> {
+  const byMessage = new Map<number, ReactionSummary[]>();
+  if (messageIds.length === 0) return byMessage;
+
+  const rows = await db
+    .select({
+      messageId: messageReactions.messageId,
+      emoji: messageReactions.emoji,
+      userId: messageReactions.userId,
+    })
+    .from(messageReactions)
+    .where(inArray(messageReactions.messageId, messageIds))
+    .orderBy(messageReactions.id);
+
+  for (const row of rows) {
+    const list = byMessage.get(row.messageId) ?? [];
+    const existing = list.find((r) => r.emoji === row.emoji);
+
+    if (existing) {
+      existing.count += 1;
+      existing.userIds.push(row.userId);
+      existing.mine = existing.mine || row.userId === viewerId;
+    } else {
+      list.push({
+        emoji: row.emoji,
+        count: 1,
+        mine: row.userId === viewerId,
+        userIds: [row.userId],
+      });
+    }
+    byMessage.set(row.messageId, list);
+  }
+
+  return byMessage;
 }
 
 export const messageRouter = createRouter({
@@ -113,9 +168,12 @@ export const messageRouter = createRouter({
         readsByMessage.set(r.messageId, arr);
       }
 
+      const reactionsByMessage = await reactionsFor(messageIds, userId, db);
+
       return msgs.reverse().map((m) => ({
         ...m,
         readBy: readsByMessage.get(m.id) || [],
+        reactions: reactionsByMessage.get(m.id) ?? [],
         isMine: m.senderId === userId,
       }));
     }),
@@ -206,6 +264,91 @@ export const messageRouter = createRouter({
       await emitToMembers(message.conversationId, "conversationUpdated", {
         conversationId: message.conversationId,
       });
+
+      return payload;
+    }),
+
+  /**
+   * Add or remove a reaction. One call, both directions.
+   *
+   * A separate add and remove would need the client to know whether its own
+   * reaction is already there, which it can only know from a possibly stale
+   * render — two taps in quick succession would then both add or both remove.
+   * The server reads and decides.
+   */
+  react: authedQuery
+    .input(
+      z.object({
+        messageId: z.number().int().positive(),
+        emoji: z.enum(REACTION_EMOJI),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+
+      // Reacting requires being able to see the message — the same predicate
+      // that guards read receipts.
+      await assertMessagesReadable(userId, [input.messageId], db);
+
+      const [message] = await db
+        .select({
+          conversationId: messages.conversationId,
+          deletedAt: messages.deletedAt,
+        })
+        .from(messages)
+        .where(eq(messages.id, input.messageId))
+        .limit(1);
+
+      if (!message || message.deletedAt) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You cannot react to this message",
+        });
+      }
+
+      const existing = await db
+        .select({ id: messageReactions.id })
+        .from(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, input.messageId),
+            eq(messageReactions.userId, userId),
+            eq(messageReactions.emoji, input.emoji)
+          )
+        )
+        .limit(1);
+
+      const added = existing.length === 0;
+
+      if (added) {
+        // The unique key decides under concurrency: two taps racing each other
+        // cannot both insert, and the loser is a no-op rather than an error.
+        await db
+          .insert(messageReactions)
+          .values({ messageId: input.messageId, userId, emoji: input.emoji })
+          .onDuplicateKeyUpdate({ set: { emoji: sql`emoji` } });
+      } else {
+        await db
+          .delete(messageReactions)
+          .where(
+            and(
+              eq(messageReactions.messageId, input.messageId),
+              eq(messageReactions.userId, userId),
+              eq(messageReactions.emoji, input.emoji)
+            )
+          );
+      }
+
+      const summary = await reactionsFor([input.messageId], userId, db);
+      const payload = {
+        messageId: input.messageId,
+        conversationId: message.conversationId,
+        added,
+        reactions: summary.get(input.messageId) ?? [],
+      };
+
+      emitToConversation(message.conversationId, "reactionUpdated", payload);
 
       return payload;
     }),

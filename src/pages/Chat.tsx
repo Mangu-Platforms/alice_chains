@@ -21,6 +21,7 @@ import {
   X,
   Pencil,
   Trash2,
+  SmilePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +36,7 @@ import {
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { MAX_MESSAGE_LENGTH } from "@contracts/constants";
+import { REACTION_EMOJI } from "@contracts/reactions";
 
 export default function Chat() {
   const { user, logout } = useAuth();
@@ -100,6 +102,13 @@ export default function Chat() {
       refetchMessages();
       refetchConversations();
     },
+    onError: (error) => toast.error(error.message),
+  });
+
+  // F-3. The server decides add-vs-remove from what is stored, so the client
+  // sends only the emoji and re-renders from the summary that comes back.
+  const react = trpc.message.react.useMutation({
+    onSuccess: () => refetchMessages(),
     onError: (error) => toast.error(error.message),
   });
 
@@ -181,9 +190,13 @@ export default function Chat() {
       // The sidebar preview may have been that message.
       refetchConversations();
     });
+    const cleanupReaction = socket.onReactionUpdated((data) => {
+      if (data.conversationId === activeConversationId) refetchMessages();
+    });
     return () => {
       cleanupUpdated();
       cleanupDeleted();
+      cleanupReaction();
     };
   }, [activeConversationId, socket, refetchMessages, refetchConversations]);
 
@@ -646,6 +659,35 @@ export default function Chat() {
                                 )}
                               </span>
                             )}
+                            {!msg.deletedAt && editingMessageId !== msg.id && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
+                                    aria-label="Add a reaction"
+                                  >
+                                    <SmilePlus className="w-3 h-3" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align={msg.isMine ? "end" : "start"}
+                                  className="flex gap-1 p-1 min-w-0"
+                                >
+                                  {REACTION_EMOJI.map((emoji) => (
+                                    <button
+                                      key={emoji}
+                                      onClick={() =>
+                                        react.mutate({ messageId: msg.id, emoji })
+                                      }
+                                      className="text-lg leading-none p-1.5 rounded-md hover:bg-secondary transition-colors"
+                                      aria-label={`React with ${emoji}`}
+                                    >
+                                      {emoji}
+                                    </button>
+                                  ))}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                             {msg.isMine &&
                               !msg.deletedAt &&
                               editingMessageId !== msg.id && (
@@ -683,6 +725,35 @@ export default function Chat() {
                                 </DropdownMenu>
                               )}
                           </div>
+                          {msg.reactions.length > 0 && !msg.deletedAt && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {msg.reactions.map((reaction) => (
+                                <button
+                                  key={reaction.emoji}
+                                  onClick={() =>
+                                    react.mutate({
+                                      messageId: msg.id,
+                                      emoji: reaction.emoji as (typeof REACTION_EMOJI)[number],
+                                    })
+                                  }
+                                  className={`flex items-center gap-1 px-1.5 h-6 rounded-full text-[11px] border transition-colors ${
+                                    reaction.mine
+                                      ? "bg-primary/20 border-primary/40"
+                                      : "bg-background/30 border-border/50 hover:bg-background/50"
+                                  }`}
+                                  aria-pressed={reaction.mine}
+                                  aria-label={`${reaction.emoji}, ${reaction.count} ${
+                                    reaction.count === 1 ? "reaction" : "reactions"
+                                  }${reaction.mine ? ", including yours" : ""}`}
+                                >
+                                  <span aria-hidden="true">{reaction.emoji}</span>
+                                  <span aria-hidden="true" className="tabular-nums">
+                                    {reaction.count}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

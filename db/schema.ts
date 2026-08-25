@@ -198,6 +198,41 @@ export const messageReads = mysqlTable(
 
 export type MessageRead = typeof messageReads.$inferSelect;
 
+// ─── Message Reactions (F-3) ──────────────────────────────────────────────
+//
+// One row per (message, member, emoji). The unique key is what makes the
+// toggle honest: tapping the same emoji twice removes the row rather than
+// stacking a second one, and two taps racing each other cannot both insert.
+export const messageReactions = mysqlTable(
+  "message_reactions",
+  {
+    id: serial("id").primaryKey(),
+    messageId: bigint("messageId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // varchar(32) holds a grapheme cluster with ZWJ sequences and skin-tone
+    // modifiers — "👨‍👩‍👧‍👦" is 25 bytes on its own. utf8mb4 is required; utf8mb3
+    // would truncate it.
+    emoji: varchar("emoji", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("message_reactions_msg_user_emoji_uq").on(t.messageId, t.userId, t.emoji),
+    index("message_reactions_message_idx").on(t.messageId),
+    foreignKey({
+      name: "message_reactions_messageId_messages_id_fk",
+      columns: [t.messageId],
+      foreignColumns: [messages.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "message_reactions_userId_users_id_fk",
+      columns: [t.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"),
+  ]
+);
+
+export type MessageReaction = typeof messageReactions.$inferSelect;
+
 // ─── Contacts (Friend relationships) ──────────────────────────────
 export const contacts = mysqlTable(
   "contacts",

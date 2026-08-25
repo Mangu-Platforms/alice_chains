@@ -10,31 +10,31 @@
 import { describe } from "vitest";
 import { sql } from "drizzle-orm";
 import { getDb } from "../../api/queries/connection";
-import {
-  contacts,
-  conversationParticipants,
-  conversations,
-  messageReads,
-  messages,
-  sessions,
-  users,
-} from "@db/schema";
+import { contacts, conversations, conversationParticipants, messages, users } from "@db/schema";
+import * as schema from "@db/schema";
+import { is } from "drizzle-orm";
+import { MySqlTable } from "drizzle-orm/mysql-core";
 
 export const hasTestDatabase = Boolean(process.env.TEST_DATABASE_URL);
 
 /** `describe` that becomes `describe.skip` when no test database is configured. */
 export const describeIntegration = hasTestDatabase ? describe : describe.skip;
 
-/** Every table, in an order that is safe to truncate once S-3 adds the FKs. */
-const ALL_TABLES = [
-  messageReads,
-  messages,
-  conversationParticipants,
-  conversations,
-  contacts,
-  sessions,
-  users,
-];
+/**
+ * Every table in the schema, discovered rather than listed.
+ *
+ * A hand-maintained list silently rots: `message_reactions` was added by F-3
+ * and not added here, so rows survived `resetDatabase` and — because TRUNCATE
+ * resets AUTO_INCREMENT, making ids recur — a stale reaction looked like a
+ * fresh one belonging to a brand-new message. Deriving the list means the next
+ * table cannot be forgotten.
+ */
+// `Object.values` over the schema module yields a union of every concrete
+// table type plus the exported type aliases, which no single predicate is
+// assignable to. Widening to `unknown` first lets `is()` do the narrowing.
+const ALL_TABLES: MySqlTable[] = (Object.values(schema) as unknown[]).filter(
+  (value): value is MySqlTable => is(value, MySqlTable)
+);
 
 /** Empty every table. Called between tests so each starts from a known state. */
 export async function resetDatabase() {

@@ -27,6 +27,13 @@ interface ServerToClientEvents {
   }) => void;
   /** F-2. Emitted by the server after a tRPC soft delete. */
   messageDeleted: (data: { id: number; conversationId: number }) => void;
+  /** F-3. The full reaction summary for one message, after a toggle. */
+  reactionUpdated: (data: {
+    messageId: number;
+    conversationId: number;
+    added: boolean;
+    reactions: { emoji: string; count: number; mine: boolean; userIds: number[] }[];
+  }) => void;
   /**
    * The server found this connection's session revoked or expired and is about
    * to close it (S-17). Sent before the disconnect so the client can say
@@ -223,6 +230,16 @@ export function useSocket() {
     []
   );
 
+  const onReactionUpdated = useCallback(
+    (handler: (data: { messageId: number; conversationId: number }) => void) => {
+      socketRef.current?.on("reactionUpdated", handler);
+      return () => {
+        socketRef.current?.off("reactionUpdated", handler);
+      };
+    },
+    []
+  );
+
   return {
     socket: socketRef.current,
     join,
@@ -240,5 +257,6 @@ export function useSocket() {
     onConversationUpdated,
     onMessageUpdated,
     onMessageDeleted,
+    onReactionUpdated,
   };
 }
