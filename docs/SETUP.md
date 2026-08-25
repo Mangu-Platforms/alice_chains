@@ -4,6 +4,31 @@ Follow this top to bottom. It assumes you have never seen the repository. Every 
 
 ---
 
+## 0. The short version
+
+```bash
+git clone https://github.com/Mangu-Platforms/alice_chains.git
+cd alice_chains
+./scripts/dev.sh        # or: npm run dev:up
+```
+
+That checks your Node version, writes a `.env` with freshly generated secrets if
+you have none, runs `npm ci`, brings MySQL up and waits for it to be genuinely
+ready, applies migrations, and starts both dev servers. It is idempotent — run
+it again any time. If you already have a MySQL 8 you would rather use, point
+`DATABASE_URL` at it and run `SKIP_DB=1 ./scripts/dev.sh`.
+
+Then, for something to look at without an OAuth provider:
+
+```bash
+npm run db:seed
+```
+
+The rest of this document is the same thing done by hand, plus everything the
+script does not do.
+
+---
+
 ## 1. Prerequisites
 
 | Tool | Version | Why |
@@ -76,9 +101,18 @@ npm run dev
 This runs two processes concurrently:
 
 * **Vite** serves the React client on **http://localhost:3000** and proxies `/api` and `/socket.io` to the API;
-* **`tsx watch api/boot.ts`** runs the Hono + tRPC + Socket.IO API on **http://localhost:3001**.
+* **`tsx watch --env-file-if-exists=.env api/boot.ts`** runs the Hono + tRPC + Socket.IO API on **http://localhost:3001**.
 
 Open http://localhost:3000 and sign in.
+
+**`.env` is loaded by Node itself**, through `--env-file-if-exists` on the
+`dev:server` and `start` scripts. It used to be loaded by nothing at all: `tsx`
+does not read `.env`, no `dotenv` call existed anywhere, and so §3's
+`cp .env.example .env` was followed by a `ZodError` naming every required
+variable — the file was written and never read. Vite reads `.env` on its own for
+the client half, and drizzle-kit does the same for migrations, which is why
+those two steps always appeared to work. Fixed in P-TOOL-1; `--env-file-if-exists`
+needs Node 20.12 or newer, and this project already requires 22.
 
 **This works now.** It did not used to: `api/boot.ts` created the HTTP server and attached Socket.IO only inside `if (NODE_ENV === "production")`, so in development nothing listened on `:3001` and every proxied request failed with `ECONNREFUSED`. The server now always binds except under `NODE_ENV=test` — dev binds `API_PORT` (3001), production binds `PORT` (3000) and additionally serves the built client.
 
@@ -87,6 +121,31 @@ Sanity check while `npm run dev` is running:
 ```bash
 curl http://localhost:3001/api/trpc/ping     # -> {"result":{"data":{"json":{"ok":true,...}}}}
 ```
+
+---
+
+## 5a. Demo data, without an OAuth provider
+
+```bash
+npm run db:seed
+```
+
+Creates three members, a direct conversation between two of them, a group
+containing all three, an accepted contact pair and a pending contact request —
+then prints a signed session cookie for each member. Paste one into the
+browser console on http://localhost:3000 and you are signed in as that person,
+with no identity provider involved.
+
+Those are ordinary sessions: a row in `sessions` plus a signed cookie, which is
+exactly what the OAuth callback produces. They expire on the normal schedule and
+can be revoked like any other. The script simply holds the signing key, because
+it runs on the machine that owns it.
+
+It refuses to run when `NODE_ENV=production`, and refuses when `DATABASE_URL`
+points anywhere but a local host — `localhost`, `127.0.0.1`, `::1`, or the `db`
+service name inside compose. There is no override flag, deliberately: a flag is
+something a line in a shell history can pass. Re-running is safe; every insert
+is keyed on a stable demo union id and skipped when the row already exists.
 
 ---
 
@@ -120,7 +179,7 @@ npm run validate      # typecheck -> test -> lint -> build
 | `ECONNREFUSED 127.0.0.1:3001` in the Vite console | The API process is not up. Check the `dev:server` half of `npm run dev` for a crash — usually a Zod env error. This is *not* the old S-2 defect; the server binds in dev now |
 | `ECONNREFUSED 127.0.0.1:3306` or `ER_ACCESS_DENIED` | MySQL is not up or `DATABASE_URL` is wrong. `docker compose ps` → is `db` `healthy`? First boot takes ~30 s; `npm run db:migrate` run too early fails on connection, not on schema. Just wait and re-run |
 | Migrations run but tables are missing | You are pointed at a different database than the app. Compare the database name in `DATABASE_URL` with `MYSQL_DATABASE` in `docker-compose.yml` (default `alice_chains`) |
-| Crash on start: `ZodError` listing env keys | `.env` is missing or malformed. Compare it against the table in §3; every "yes" row must be present and non-empty |
+| Crash on start: `ZodError` listing env keys | `.env` is missing or malformed. Compare it against the table in §3; every "yes" row must be present and non-empty. Before P-TOOL-1 this happened even with a perfectly good `.env`, because nothing loaded it — if you see it on an older checkout, that is why |
 | Sign-in redirects to `.../oauth/authorize/oauth/authorize` | `VITE_KIMI_AUTH_URL` holds a **full authorize URL** instead of an origin. It must be `https://auth.example.com`, not `https://auth.example.com/oauth/authorize` — the app derives all three endpoint paths from it |
 | 400 at `/api/oauth/callback`, or the provider rejects the exchange | The `redirect_uri` differs between the two legs of the exchange. Set `PUBLIC_BASE_URL` to the origin users actually reach (`http://localhost:3000` in dev) and register exactly `{PUBLIC_BASE_URL}/api/oauth/callback` with the provider |
 | Socket connects then immediately disconnects | The session cookie is missing or expired — sign in again. The handshake requires a valid `alice_session` cookie |

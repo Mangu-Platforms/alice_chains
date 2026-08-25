@@ -9,7 +9,7 @@ This project was built using the webapp-building and backend-building skills.
 - **Socket.IO for real-time**: Used Socket.IO with room-based broadcasting for real-time messaging. Each conversation is a room, and users join their own rooms for direct notifications.
 - **tRPC for API**: All CRUD operations go through tRPC routers with Zod validation for end-to-end type safety.
 - **Drizzle ORM**: Type-safe database queries with MySQL.
-- **OAuth 2.0**: Authentication via Kimi OAuth with JWT sessions.
+- **OAuth 2.0**: Authentication via Kimi OAuth (with `state` and PKCE S256). Sessions are HMAC-SHA256 signed cookies backed by a server-side session store — not JWTs, despite the historical `JWT_SECRET` variable name.
 
 ### Database Schema
 

@@ -189,7 +189,7 @@ Logout emits `alice_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` — `ap
 | SEC-C-05 | Rotation + invalidation | Issue a fresh token on every successful callback (already true) **and** add server-side revocation: a `sessions` table (`id` PK, `userId`, `createdAt`, `lastSeenAt`, `revokedAt`, `uaHash`) with the row id embedded in the payload as `sid`. `verifySessionToken` → `sid` lookup → reject when `revokedAt` is set. `/api/logout` sets `revokedAt = NOW()` **before** clearing the cookie. |
 | SEC-C-06 | Dual expiry | Absolute 7 d from `iat` (keep `api/kimi/session.ts:36`) **plus** idle 24 h from `sessions.lastSeenAt`, refreshed at most once per 5 min to avoid a write per request. Add `v` (payload version) so a format change invalidates old tokens. |
 | SEC-C-07 | Cookie flags | Emit via one helper. Prod: `__Host-alice_session=<t>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`. Dev over http: drop `Secure` and the `__Host-` prefix only when `NODE_ENV !== "production"`. Logout must clear with the *same* attributes. |
-| SEC-C-08 | Delete duplicates | Remove `api/kimi/session.ts:40-51`, `api/lib/cookies.ts` entirely; single exported `sessionCookie.serialize()/clear()` in `api/kimi/session.ts`. |
+| SEC-C-08 | Delete duplicates | **Delivered by S-17, with a placement change from the original text.** `api/lib/cookies.ts` is the single cookie module — `serializeSessionCookie`, `clearSessionCookie`, `sessionCookieName`, `parseSessionToken`, plus the OAuth attempt cookies S-4 introduced. The duplicate `getSessionCookieOptions` in `api/kimi/session.ts` and the dead `api/lib/http.ts` are deleted. The original text put the helper in `api/kimi/session.ts` and removed `api/lib/cookies.ts`; that was written before S-4 added the `state`/PKCE cookies, and splitting cookie emission across two modules to satisfy it would recreate the very drift this control exists to prevent. One module, either way. |
 | SEC-C-29 | Live session expiry on sockets | Re-verify the session on the socket every 15 min (`socket.data.expiresAt`); on failure emit `sessionExpired` and `socket.disconnect(true)`. |
 | SEC-C-30 | Uniform failures | Callback errors return one generic body; no distinction between "unknown code", "expired code", "userinfo failed". |
 
@@ -260,7 +260,7 @@ PUBLIC_BASE_URL=http://localhost:3000
 | userinfo | `kimiEndpoint(VITE_KIMI_AUTH_URL, "userinfo")` | `api/kimi/auth.ts` (replaces `:60`) |
 | redirect_uri | `new URL(Paths.oauthCallback, PUBLIC_BASE_URL).toString()` — **one constant, both sides** | `src/pages/Login.tsx:6`, `api/kimi/auth.ts:47` |
 
-`api/kimi/platform.ts:8-14` must be rewritten to read from `env` (it currently reads `process.env` directly with `|| ""` fallbacks, bypassing the Zod schema) or deleted — it has no call sites today.
+~~`api/kimi/platform.ts:8-14` must be rewritten to read from `env` (it currently reads `process.env` directly with `|| ""` fallbacks, bypassing the Zod schema) or deleted — it has no call sites today.~~ **Deleted in P-TOOL-7.** It had no call sites, and its `API_BASE` read was the only reference to a variable nothing else in the codebase consumed — documenting it in `.env.example` would have invited an operator to configure something with no effect.
 
 **Authorize request after SEC-C-03/04:**
 
@@ -627,7 +627,7 @@ No upload endpoint exists today. `messages.fileUrl` (`db/schema.ts:68`) and `typ
 
 **`VITE_` rule.** Vite inlines every `VITE_`-prefixed variable into the client bundle at build time — see `Dockerfile:14-18`, which declares them as build args precisely for this reason. Anything `VITE_`-prefixed is **published to every visitor**.
 
-> **Verified, stated plainly: no secret is currently exposed this way.** Only `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` carry the prefix (`src/pages/Login.tsx:4-5`), and both are legitimately public. Grepping the built bundle `dist/public/assets/index-*.js` for `APP_SECRET`, `JWT_SECRET`, `your-app-secret` and `your-jwt-secret` returns **zero matches**. The risk is latent, not realised: `api/lib/env.ts` places `VITE_*` and secrets in the same schema and `api/kimi/platform.ts:10-13` reads both from `process.env` side by side, so a future rename such as `VITE_APP_SECRET` would ship the OAuth client secret to the public without any build error.
+> **Verified, stated plainly: no secret is currently exposed this way.** Only `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` carry the prefix (`src/pages/Login.tsx:4-5`), and both are legitimately public. Grepping the built bundle `dist/public/assets/index-*.js` for `APP_SECRET`, `JWT_SECRET`, `your-app-secret` and `your-jwt-secret` returns **zero matches**. The risk is latent, not realised: `api/lib/env.ts` places `VITE_*` and secrets in the same schema, so a future rename such as `VITE_APP_SECRET` would ship the OAuth client secret to the public without any build error. **Since closed:** `assertNoLeakedSecrets` refuses to boot on such a name, `api/kimi/platform.ts` — which read the two side by side — was deleted in P-TOOL-7, and `test/env-example.test.ts` fails if one appears in `.env.example`.
 
 **Required:**
 

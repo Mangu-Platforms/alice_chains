@@ -4,17 +4,112 @@ on:
   push:
   pull_request:
 
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
+    name: validate
     runs-on: ubuntu-latest
+
+    services:
+      # BUILD_PLAN S-12. Without this the integration suites skip, which is how
+      # every authorization proof Wave 1 added could have silently stopped
+      # running. The image matches docker-compose.yml so CI and local
+      # development agree.
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root
+          MYSQL_DATABASE: alice_chains_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci_root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --health-start-period=30s
+
+    env:
+      DATABASE_URL: mysql://root:ci_root@127.0.0.1:3306/alice_chains_test
+      # Opts the integration suites in. When unset they skip rather than fail,
+      # so this line is what makes them run at all — see test/README.md.
+      TEST_DATABASE_URL: mysql://root:ci_root@127.0.0.1:3306/alice_chains_test
+      # Lets db:verify-migration provision its own scratch database.
+      ADMIN_DATABASE_URL: mysql://root:ci_root@127.0.0.1:3306/
+      # api/lib/env.ts parses these at import time and refuses to start on a
+      # secret shorter than 32 characters. CI values, not secrets: nothing they
+      # protect exists in this job.
+      VITE_KIMI_AUTH_URL: https://auth.example.com
+      VITE_APP_ID: ci-app-id
+      APP_SECRET: ci-app-secret-thirty-two-characters-min
+      JWT_SECRET: ci-session-secret-thirty-two-chars-min
+      PUBLIC_BASE_URL: http://localhost:3000
+      NODE_ENV: test
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run lint
-      - run: npm run build
+
+      # `npm ci` and never `npm install`: the lockfile is the contract.
+      - name: Install
+        run: npm ci
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 60); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pci_root --silent 2>/dev/null; then
+              echo "MySQL is up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "MySQL did not become ready"; exit 1
+
+      # Before the suite, not alongside it: every integration test assumes the
+      # schema, the foreign keys and the indexes S-3 added are present.
+      - name: Apply migrations
+        run: npm run db:migrate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      # S-20. An icon-only control with no accessible name is announced as
+      # "button" and nothing else. Cheap to check, easy to reintroduce.
+      - name: Check accessible names
+        run: npm run check:a11y
+
+      - name: Build
+        run: npm run build
+
+      # S-16 / NFR-PERF-06. The budget is on what a first-time visitor must
+      # download before anything renders. Without this gate every new
+      # dependency lands on the critical path unnoticed — which is exactly what
+      # happened across Waves 4 and 5.
+      - name: Check the bundle budget
+        run: npm run check:bundle
+
+      # Covers what the suite cannot: the constraint migration's dedupe and
+      # orphan handling, against a deliberately dirty scratch database.
+      - name: Verify the constraint migration
+        run: npm run db:verify-migration
+
+      # Proves a clean clone can still reach a working schema — a migration
+      # that only applies on top of an already-migrated database is a
+      # deployment failure waiting to happen.
+      - name: Migrate a fresh database from zero
+        run: |
+          mysql -h 127.0.0.1 -uroot -pci_root -e "DROP DATABASE IF EXISTS ci_fresh; CREATE DATABASE ci_fresh CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          DATABASE_URL=mysql://root:ci_root@127.0.0.1:3306/ci_fresh npm run db:migrate

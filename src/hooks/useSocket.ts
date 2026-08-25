@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import type { Message } from "@db/schema";
 
@@ -17,7 +17,34 @@ interface ServerToClientEvents {
   userOnline: (data: { userId: number }) => void;
   userOffline: (data: { userId: number }) => void;
   onlineUsers: (userIds: number[]) => void;
-  messageError: (data: { error: string }) => void;
+  messageError: (data: { error: string; tempId?: string }) => void;
+  /** F-2. Emitted by the server after a tRPC edit. */
+  messageUpdated: (data: {
+    id: number;
+    conversationId: number;
+    content: string;
+    isEdited: boolean;
+  }) => void;
+  /** F-2. Emitted by the server after a tRPC soft delete. */
+  messageDeleted: (data: { id: number; conversationId: number }) => void;
+  /** S-13. The server refused a frame; the member should be told, not left
+   *  wondering why their message vanished. */
+  rateLimited: (data: { event: string; retryAfterMs: number }) => void;
+  /** S-14. The server refused a frame's shape. Always a client bug. */
+  invalidPayload: (data: { event: string; message: string }) => void;
+  /** F-3. The full reaction summary for one message, after a toggle. */
+  reactionUpdated: (data: {
+    messageId: number;
+    conversationId: number;
+    added: boolean;
+    reactions: { emoji: string; count: number; mine: boolean; userIds: number[] }[];
+  }) => void;
+  /**
+   * The server found this connection's session revoked or expired and is about
+   * to close it (S-17). Sent before the disconnect so the client can say
+   * "signed out" rather than fall into a silent reconnect loop.
+   */
+  sessionExpired: () => void;
 }
 
 interface ClientToServerEvents {
@@ -35,8 +62,13 @@ interface ClientToServerEvents {
   typing: (data: { conversationId: number; isTyping: boolean }) => void;
 }
 
+export type ConnectionState = "connecting" | "connected" | "disconnected";
+
 export function useSocket() {
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
+  // P-UX-2. The socket's state was invisible to the app, so a send into a dead
+  // connection looked identical to a successful one.
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
 
   useEffect(() => {
     const socket = io({
@@ -47,7 +79,26 @@ export function useSocket() {
 
     socketRef.current = socket;
 
+    socket.on("connect", () => setConnection("connected"));
+    socket.on("disconnect", () => setConnection("disconnected"));
+    // Socket.IO retries on its own; this is what distinguishes "trying" from
+    // "given up" for the banner.
+    socket.io.on("reconnect_attempt", () => setConnection("connecting"));
+    socket.io.on("reconnect_failed", () => setConnection("disconnected"));
+
+    // A revoked session cannot be recovered by reconnecting, so stop trying and
+    // send the browser to the login page.
+    socket.on("sessionExpired", () => {
+      socket.disconnect();
+      window.location.href = "/login";
+    });
+
     return () => {
+      socket.off("sessionExpired");
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.io.off("reconnect_attempt");
+      socket.io.off("reconnect_failed");
       socket.disconnect();
     };
   }, []);
@@ -173,8 +224,47 @@ export function useSocket() {
     []
   );
 
+  const onMessageUpdated = useCallback(
+    (
+      handler: (data: {
+        id: number;
+        conversationId: number;
+        content: string;
+        isEdited: boolean;
+      }) => void
+    ) => {
+      socketRef.current?.on("messageUpdated", handler);
+      return () => {
+        socketRef.current?.off("messageUpdated", handler);
+      };
+    },
+    []
+  );
+
+  const onMessageDeleted = useCallback(
+    (handler: (data: { id: number; conversationId: number }) => void) => {
+      socketRef.current?.on("messageDeleted", handler);
+      return () => {
+        socketRef.current?.off("messageDeleted", handler);
+      };
+    },
+    []
+  );
+
+  const onReactionUpdated = useCallback(
+    (handler: (data: { messageId: number; conversationId: number }) => void) => {
+      socketRef.current?.on("reactionUpdated", handler);
+      return () => {
+        socketRef.current?.off("reactionUpdated", handler);
+      };
+    },
+    []
+  );
+
   return {
     socket: socketRef.current,
+    connection,
+    isConnected: connection === "connected",
     join,
     joinConversation,
     leaveConversation,
@@ -188,5 +278,8 @@ export function useSocket() {
     onUserOffline,
     onOnlineUsers,
     onConversationUpdated,
+    onMessageUpdated,
+    onMessageDeleted,
+    onReactionUpdated,
   };
 }

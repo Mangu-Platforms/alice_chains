@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
+import { t } from "@/i18n";
+import { MIN_USER_SEARCH_LENGTH } from "@contracts/constants";
 import {
   ArrowLeft,
   Search,
@@ -17,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -40,9 +43,14 @@ export default function Contacts() {
   const { data: pendingRequests, refetch: refetchPending } =
     trpc.contact.pending.useQuery();
 
+  // S-10 raised the server-side minimum to MIN_USER_SEARCH_LENGTH characters,
+  // so the query stays disabled below it rather than firing a request the
+  // server will reject.
+  const trimmedUserQuery = searchUserQuery.trim();
+  const userQueryIsSearchable = trimmedUserQuery.length >= MIN_USER_SEARCH_LENGTH;
   const searchUsersQuery = trpc.contact.searchUsers.useQuery(
-    { query: searchUserQuery },
-    { enabled: searchUserQuery.length > 0 }
+    { query: trimmedUserQuery },
+    { enabled: userQueryIsSearchable }
   );
 
   const addContactMutation = trpc.contact.add.useMutation({
@@ -91,7 +99,12 @@ export default function Contacts() {
     <div className="h-screen w-full bg-background flex flex-col">
       {/* Header */}
       <header className="flex items-center gap-4 px-4 py-3 border-b border-border bg-card/30">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t("a11y.back")}
+          onClick={() => navigate("/")}
+        >
           <ArrowLeft className="w-5 h-5" />
         </Button>
         <div className="flex items-center gap-3 flex-1">
@@ -114,6 +127,7 @@ export default function Contacts() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   placeholder="Search by name or email..."
+                  aria-label={t("a11y.searchUsers")}
                   className="pl-9"
                   value={searchUserQuery}
                   onChange={(e) => setSearchUserQuery(e.target.value)}
@@ -142,16 +156,22 @@ export default function Contacts() {
                             {foundUser.name}
                           </p>
                           <p className="text-xs text-muted-foreground truncate">
-                            {foundUser.email}
+                            {isContact ? "Already a contact" : "Not in your contacts"}
                           </p>
                         </div>
                         {isContact ? (
-                          <Button variant="ghost" size="sm" disabled>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled
+                            aria-label={`${foundUser.name} is already a contact`}
+                          >
                             <UserCheck className="w-4 h-4" />
                           </Button>
                         ) : (
                           <Button
                             size="sm"
+                            aria-label={`Send a contact request to ${foundUser.name}`}
                             onClick={() =>
                               addContactMutation.mutate({
                                 contactUserId: foundUser.id,
@@ -166,18 +186,35 @@ export default function Contacts() {
                     );
                   })}
 
-                  {searchUserQuery &&
-                    searchUsersQuery.data?.length === 0 && (
+                  {userQueryIsSearchable && searchUsersQuery.isPending && (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Spinner className="w-6 h-6 mx-auto mb-3" />
+                      <p className="text-sm">Searching…</p>
+                    </div>
+                  )}
+
+                  {userQueryIsSearchable && searchUsersQuery.isError && (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Search className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                      <p className="text-sm">{searchUsersQuery.error.message}</p>
+                    </div>
+                  )}
+
+                  {userQueryIsSearchable &&
+                    searchUsersQuery.isSuccess &&
+                    searchUsersQuery.data.length === 0 && (
                       <div className="text-center py-8 text-muted-foreground">
                         <Search className="w-10 h-10 mx-auto mb-3 opacity-40" />
                         <p className="text-sm">No users found</p>
                       </div>
                     )}
 
-                  {!searchUserQuery && (
+                  {!userQueryIsSearchable && (
                     <div className="text-center py-8 text-muted-foreground">
                       <Search className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                      <p className="text-sm">Type to search for users</p>
+                      <p className="text-sm">
+                        Type at least {MIN_USER_SEARCH_LENGTH} characters to search
+                      </p>
                     </div>
                   )}
                 </div>
@@ -262,6 +299,10 @@ export default function Contacts() {
                         variant="ghost"
                         size="icon"
                         className="h-9 w-9"
+                        aria-label={t(
+                          "a11y.messageContact",
+                          contact.contactName || "this contact"
+                        )}
                         onClick={() =>
                           handleStartChat(contact.contactUserId)
                         }
@@ -273,6 +314,10 @@ export default function Contacts() {
                         variant="ghost"
                         size="icon"
                         className="h-9 w-9"
+                        aria-label={t(
+                          "a11y.removeContact",
+                          contact.contactName || "this contact"
+                        )}
                         onClick={() =>
                           removeContactMutation.mutate({
                             contactUserId: contact.contactUserId,
@@ -334,6 +379,10 @@ export default function Contacts() {
                       variant="ghost"
                       size="icon"
                       className="h-9 w-9"
+                      aria-label={t(
+                        "a11y.declineRequest",
+                        request.contactName || "this person"
+                      )}
                       onClick={() =>
                         removeContactMutation.mutate({
                           contactUserId: request.userId,

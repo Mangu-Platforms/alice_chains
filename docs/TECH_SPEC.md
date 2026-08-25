@@ -286,7 +286,7 @@ alice_chains/
 │   ├── message-router.ts         listByConversation/send/markAsRead
 │   ├── contact-router.ts         list/pending/add/accept/remove/searchUsers
 │   ├── socket.ts                 Socket.IO server, rooms, presence   :21-213
-│   ├── kimi/                     identity: auth.ts, session.ts, types.ts, platform.ts†
+│   ├── kimi/                     identity: auth.ts, session.ts, types.ts, pkce.ts
 │   ├── lib/                      env.ts, cookies.ts†, http.ts†, vite.ts
 │   └── queries/                  connection.ts (pool), users.ts
 ├── db/                           schema.ts, relations.ts, migrations/
@@ -312,7 +312,7 @@ alice_chains/
 | `api/middleware.ts` | Procedure builders and the auth gate | Know about conversations, messages or contacts. `adminQuery` (FR-ADMIN-02) belongs here |
 | `api/*-router.ts` | One tRPC namespace each: input schema → authorization → persistence → projection | Talk to Socket.IO directly today (they do not — see FR-MSG-08); after ADR-007 they emit **through** a single `api/realtime/emit.ts` façade, never `import { getIO }` scattered |
 | `api/socket.ts` | Transport: handshake auth, room membership, event dispatch | Own message-write business logic. Today it duplicates the insert at `:107-114`, diverging from `api/message-router.ts:115-122` — this is contract gap G-2 (`API_CONTRACT.md §7.1`) and ADR-007 |
-| `api/kimi/**` | OAuth exchange, session token sign/verify, profile mapping | Read `process.env` directly — it does, at `api/kimi/auth.ts:36,44,45,60` and `api/kimi/platform.ts:10-13`, bypassing the validated `env` object (§8.3) |
+| `api/kimi/**` | OAuth exchange, session token sign/verify, profile mapping | Read `process.env` directly — it does, at `api/kimi/auth.ts:36,44,45,60`, bypassing the validated `env` object (§8.3). `platform.ts` was the other offender and was deleted in P-TOOL-7 |
 | `api/queries/**` | Pool ownership and reusable data access | Be the only data-access layer today — routers call `getDb()` and build queries inline. Acceptable while the surface is 16 procedures; revisit if it exceeds ~30 |
 | `api/lib/env.ts` | The **single** validated configuration boundary | Be bypassed. It currently is (see above) |
 | `db/**` | Drizzle schema, relations, generated migrations | Contain runtime logic. `db/relations.ts` is imported by nothing today — the pool passes `schema` only (`api/queries/connection.ts:3,7`), so the relational query API is unused |
@@ -716,8 +716,8 @@ Scope key: **S** = server process only · **C** = inlined into the public client
 | Name | Req? | Scope | Format | Default | Example | Read at | What breaks without it |
 |---|---|---|---|---|---|---|---|
 | `DATABASE_URL` | **yes** | S | mysql2 connection URI | — | `mysql://alice:pw@db:3306/alice_chains` | `api/lib/env.ts:4` → `api/queries/connection.ts:6` | Process exits at boot (Zod `min(1)`). Every procedure and every socket handler is dead. |
-| `VITE_KIMI_AUTH_URL` | **yes** | **C** + S | `z.string().url()` | — | `https://kimi.example.com` | `api/lib/env.ts:5`; **read directly from `process.env`** at `api/kimi/auth.ts:36,60`, `api/kimi/platform.ts:10`; client at `src/pages/Login.tsx:4` | Boot fails. **Also: it is interpreted three incompatible ways today — FR-AUTH-06. `SEC-C-01` keeps the name and tightens validation to a bare origin; see §8.4.** `VITE_`-prefixed, so it is inlined into the public bundle and must never hold a secret. |
-| `VITE_APP_ID` | **yes** | **C** + S | opaque string | — | `alice-chains-prod` | `api/lib/env.ts:6`; `process.env` at `api/kimi/auth.ts:44`, `api/kimi/platform.ts:11`; client at `src/pages/Login.tsx:5` | Boot fails; OAuth `client_id` absent. Public by RFC 6749 — correctly `VITE_`-prefixed. |
+| `VITE_KIMI_AUTH_URL` | **yes** | **C** + S | `z.string().url()` | — | `https://kimi.example.com` | `api/lib/env.ts:5`; **read directly from `process.env`** at `api/kimi/auth.ts:36,60`; client at `src/pages/Login.tsx:4` | Boot fails. **Also: it is interpreted three incompatible ways today — FR-AUTH-06. `SEC-C-01` keeps the name and tightens validation to a bare origin; see §8.4.** `VITE_`-prefixed, so it is inlined into the public bundle and must never hold a secret. |
+| `VITE_APP_ID` | **yes** | **C** + S | opaque string | — | `alice-chains-prod` | `api/lib/env.ts:6`; `process.env` at `api/kimi/auth.ts:44`; client at `src/pages/Login.tsx:5` | Boot fails; OAuth `client_id` absent. Public by RFC 6749 — correctly `VITE_`-prefixed. |
 | `APP_SECRET` | **yes** | **S** | ≥32 bytes (today `min(1)`) | — | 43-char base64url | `api/lib/env.ts:7`; `process.env` at `api/kimi/auth.ts:45` | Boot fails. Token exchange rejected by the IdP. `min(1)` is `NFR-SEC-08` (Defective). |
 | `JWT_SECRET` | **yes** | **S** | ≥32 bytes (today `min(1)`) | — | 43-char base64url | `api/lib/env.ts:8` → `api/kimi/session.ts:20` | Boot fails. **Misnamed — see §8.5.** Changing the value invalidates every live session. |
 | `PORT` | no | S | integer string | `"3000"` (schema) / `DEFAULT_PROD_PORT` (boot) | `3000` | `api/lib/env.ts:9`; **`api/boot.ts:57` reads `process.env.PORT` directly, not `env.PORT`** | Prod binds 3000. Note `getPort()` (`api/lib/env.ts:17-19`) is dead code — no call sites. |
@@ -749,7 +749,7 @@ Scope key: **S** = server process only · **C** = inlined into the public client
 |---|---|---|
 | `api/kimi/auth.ts:36,60` | `VITE_KIMI_AUTH_URL` | Undefined yields the literal string `"undefined/api/oauth/token"` at runtime instead of a boot failure |
 | `api/kimi/auth.ts:44,45` | `VITE_APP_ID`, `APP_SECRET` | Same class |
-| `api/kimi/platform.ts:10-13` | all four, with `\|\| ""` fallbacks | Silently substitutes empty strings; the module has **no call sites** and should be deleted or rewritten (`SECURITY.md §3.3`) |
+| ~~`api/kimi/platform.ts:10-13`~~ | ~~all four, with `\|\| ""` fallbacks~~ | **Deleted in P-TOOL-7.** It had no call sites |
 | `api/socket.ts:24` | `NODE_ENV` | Duplicates `env.NODE_ENV`; drifts if the schema's default ever changes |
 | `api/boot.ts:57,58` | `PORT`, `API_PORT` | `PORT` bypasses its own validated default; `API_PORT` is unvalidated entirely |
 
@@ -761,7 +761,7 @@ Vite performs **static text replacement** of `import.meta.env.VITE_*` at build t
 
 **Verified today: no secret is exposed.** Only `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` carry the prefix and both are legitimately public (`SECURITY.md §10`).
 
-**The latent risk is structural, not incidental.** `api/lib/env.ts:3-12` places secrets and `VITE_*` variables in one schema, and `api/kimi/platform.ts:10-13` reads them side by side. Renaming `APP_SECRET` to `VITE_APP_SECRET` would publish the OAuth client secret with **zero build errors and zero test failures**.
+**The latent risk is structural, not incidental.** `api/lib/env.ts:3-12` places secrets and `VITE_*` variables in one schema. Renaming `APP_SECRET` to `VITE_APP_SECRET` would once have published the OAuth client secret with zero build errors and zero test failures; `assertNoLeakedSecrets` (SEC-C-24) now refuses to boot on it, and P-TOOL-7 adds a test that catches such a name in `.env.example` a step earlier still — in the file people copy.
 
 Required (`FR-AUTH-12`, `SEC-C-24`):
 
@@ -1293,7 +1293,7 @@ Phase boundaries follow `SRS.md §9`: Phase 1 makes the release criteria *achiev
 | Workstream | Modules touched | Closes | Notes |
 |---|---|---|---|
 | **P1-A Repo integrity** | git index, `.github/workflows/ci.yml` | `NFR-OPS-01/02`, `NFR-SEC-12`, `SEC-C-27` | W0. Commit the six untracked files. Nothing else can be reviewed until this lands |
-| **P1-B Config boundary** | `api/lib/env.ts`, `contracts/oauth.ts` (new), `api/kimi/platform.ts` (delete), `.env.example`, `Dockerfile`, `docker-compose.yml` | `FR-AUTH-06/07/12`, `NFR-SEC-08`, `SEC-C-01/02/24` | §8. Includes `PUBLIC_BASE_URL`, the origin-only refinement on `VITE_KIMI_AUTH_URL`, secret minimum lengths, the `SESSION_SECRET` alias |
+| **P1-B Config boundary** | `api/lib/env.ts`, `contracts/oauth.ts` (new), ~~`api/kimi/platform.ts`~~ (deleted, P-TOOL-7), `.env.example`, `Dockerfile`, `docker-compose.yml` | `FR-AUTH-06/07/12`, `NFR-SEC-08`, `SEC-C-01/02/24` | §8. Includes `PUBLIC_BASE_URL`, the origin-only refinement on `VITE_KIMI_AUTH_URL`, secret minimum lengths, the `SESSION_SECRET` alias |
 | **P1-C OAuth hardening** | `api/kimi/auth.ts`, new `GET /api/oauth/login`, `src/pages/Login.tsx` | `FR-AUTH-08/09`, `NFR-SEC-01`, `SEC-C-03/04` | §5.1 target diagram. Wave W5 (breaking) |
 | **P1-D Session & cookie** | `api/kimi/session.ts`, `api/lib/cookies.ts` (delete), `contracts/constants.ts` | `FR-SESS-02/03/10`, `NFR-SEC-04`, `SEC-C-07/08` | Three cookie implementations collapse to one; dual-name read for the `__Host-` transition (§13.2) |
 | **P1-E Shared validation** | `contracts/schemas.ts` (new), `api/socket.ts`, `api/*-router.ts` | `FR-MSG-01`, `NFR-SEC-03`, `SEC-C-13` | One Zod schema per event, imported by both transports — closes gap G-2 permanently |

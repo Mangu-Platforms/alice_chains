@@ -1,43 +1,160 @@
 import { z } from "zod";
-import { eq, and, desc, inArray } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
+import { TRPCError } from "@trpc/server";
+import { eq, and, inArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/mysql-core";
+import { createRouter, authedQuery, rateLimited } from "./middleware";
+import { Limits } from "./lib/rate-limit";
 import { getDb } from "./queries/connection";
 import {
-  conversations,
-  conversationParticipants,
-  messages,
-  users,
-} from "@db/schema";
+  assertNotBlocked,
+  assertParticipant,
+  assertUsersExist,
+  isParticipant,
+} from "./lib/authz";
+import { emitToMembers } from "./lib/realtime";
+import {
+  CONVERSATION_LIST_LIMIT,
+  MAX_CONVERSATION_PARTICIPANTS,
+} from "@contracts/constants";
+
+/** Row shape of the conversation-list statement in `list`. */
+interface ConversationListRow {
+  id: number;
+  name: string | null;
+  type: "direct" | "group";
+  avatar: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  lastMessageContent: string | null;
+  lastMessageAt: Date | null;
+  lastMessageSenderId: number | null;
+  unreadCount: number | string | null;
+}
+import { conversations, conversationParticipants, users } from "@db/schema";
+
+/**
+ * `conversation_participants` is joined twice in `createDirect` — once for the
+ * caller, once for the other member — so the second reference needs an alias.
+ */
+const otherMember = alias(conversationParticipants, "otherMember");
+
+
+/**
+ * Load a group the caller may administer.
+ *
+ * `conversations.createdBy` was written at creation and never read — there was
+ * no owner check anywhere, because there was nothing to check (F-7). These are
+ * the two gates the new procedures share.
+ */
+async function loadGroup(conversationId: number, db = getDb()) {
+  const [conversation] = await db
+    .select({
+      id: conversations.id,
+      type: conversations.type,
+      createdBy: conversations.createdBy,
+      name: conversations.name,
+    })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+
+  if (!conversation || conversation.type !== "group") {
+    // A direct conversation has no name, no avatar and a fixed membership;
+    // administering one is not a thing that exists rather than a thing that is
+    // forbidden. Both answer the same way so neither is an id-probing oracle.
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This is not a group conversation",
+    });
+  }
+
+  return conversation;
+}
+
+/** Throws unless the caller both belongs to the group and owns it. */
+async function assertGroupOwner(userId: number, conversationId: number, db = getDb()) {
+  const conversation = await loadGroup(conversationId, db);
+  await assertParticipant(userId, conversationId, db);
+
+  if (conversation.createdBy !== userId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the group owner can do that",
+    });
+  }
+
+  return conversation;
+}
+
+/** Touch `updatedAt` and tell every member, so open clients converge. */
+async function announceConversationChange(conversationId: number, db = getDb()) {
+  await db
+    .update(conversations)
+    .set({ updatedAt: new Date() })
+    .where(eq(conversations.id, conversationId));
+
+  await emitToMembers(conversationId, "conversationUpdated", { conversationId });
+}
 
 export const conversationRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
     const db = getDb();
     const userId = ctx.user.id;
 
-    // Get all conversation IDs where user is a participant
-    const participantRows = await db
-      .select({ conversationId: conversationParticipants.conversationId })
-      .from(conversationParticipants)
-      .where(eq(conversationParticipants.userId, userId));
+    // S-11. This was four round trips reduced in JavaScript, and the fourth
+    // selected EVERY message of EVERY conversation the caller belongs to — no
+    // LIMIT — purely to pick the newest one per conversation in Node. At ten
+    // conversations of five thousand messages that is fifty thousand rows per
+    // sidebar render, and the client refetches on every inbound message.
+    //
+    // One statement now, per DATA_MODEL.md 6.1: a window function picks the
+    // last message per conversation and a correlated subquery counts the
+    // unread. Both are index range scans on IX-1
+    // (messages(conversationId, createdAt)); the membership CTE uses IX-2.
+    //
+    // COALESCE against '1970-01-02' rather than '1970-01-01': MySQL TIMESTAMP
+    // cannot represent the epoch itself, so the obvious zero value is a
+    // runtime error.
+    const rows = await db.execute(sql`
+      WITH my AS (
+        SELECT conversationId, lastReadAt
+        FROM conversation_participants
+        WHERE userId = ${userId}
+      ),
+      last_msg AS (
+        SELECT m.id, m.conversationId, m.content, m.createdAt, m.senderId,
+               ROW_NUMBER() OVER (PARTITION BY m.conversationId ORDER BY m.id DESC) rn
+        FROM messages m
+        JOIN my ON my.conversationId = m.conversationId
+        -- F-2. History keeps tombstones so a reply chain holds its shape, but
+        -- the sidebar preview must not: showing an empty bubble as the last
+        -- message is worse than showing the one before it.
+        WHERE m.deletedAt IS NULL
+      )
+      SELECT c.id, c.name, c.type, c.avatar, c.createdAt, c.updatedAt,
+             lm.content        AS lastMessageContent,
+             lm.createdAt      AS lastMessageAt,
+             lm.senderId       AS lastMessageSenderId,
+             (SELECT COUNT(*) FROM messages um
+                WHERE um.conversationId = c.id
+                  AND um.deletedAt IS NULL
+                  AND um.senderId <> ${userId}
+                  AND um.createdAt > COALESCE(my.lastReadAt, '1970-01-02')) AS unreadCount
+      FROM conversations c
+      JOIN my ON my.conversationId = c.id
+      LEFT JOIN last_msg lm ON lm.conversationId = c.id AND lm.rn = 1
+      ORDER BY COALESCE(lm.createdAt, c.createdAt) DESC
+      LIMIT ${CONVERSATION_LIST_LIMIT}
+    `);
 
-    const conversationIds = participantRows.map((r) => r.conversationId);
-    if (conversationIds.length === 0) return [];
+    const convs = (rows as unknown as [ConversationListRow[]])[0];
+    if (convs.length === 0) return [];
 
-    // Get conversations with latest message
-    const convs = await db
-      .select({
-        id: conversations.id,
-        name: conversations.name,
-        type: conversations.type,
-        avatar: conversations.avatar,
-        createdAt: conversations.createdAt,
-        updatedAt: conversations.updatedAt,
-      })
-      .from(conversations)
-      .where(inArray(conversations.id, conversationIds))
-      .orderBy(desc(conversations.updatedAt));
+    const conversationIds = convs.map((c) => Number(c.id));
 
-    // Get participants for each conversation
+    // Participants are hydrated separately rather than GROUP_CONCAT-ed, so the
+    // shape stays typed and a large group does not truncate at the
+    // group_concat_max_len cliff.
     const participants = await db
       .select({
         conversationId: conversationParticipants.conversationId,
@@ -49,26 +166,6 @@ export const conversationRouter = createRouter({
       .leftJoin(users, eq(conversationParticipants.userId, users.id))
       .where(inArray(conversationParticipants.conversationId, conversationIds));
 
-    // Get latest message for each conversation
-    const latestMessages = await db
-      .select({
-        conversationId: messages.conversationId,
-        content: messages.content,
-        createdAt: messages.createdAt,
-        senderId: messages.senderId,
-      })
-      .from(messages)
-      .where(inArray(messages.conversationId, conversationIds))
-      .orderBy(desc(messages.createdAt));
-
-    // Build result
-    const latestByConv = new Map<number, (typeof latestMessages)[number]>();
-    for (const m of latestMessages) {
-      if (!latestByConv.has(m.conversationId)) {
-        latestByConv.set(m.conversationId, m);
-      }
-    }
-
     const partsByConv = new Map<number, typeof participants>();
     for (const p of participants) {
       const arr = partsByConv.get(p.conversationId) || [];
@@ -77,26 +174,29 @@ export const conversationRouter = createRouter({
     }
 
     return convs.map((conv) => {
-      const parts = partsByConv.get(conv.id) || [];
+      const id = Number(conv.id);
+      const parts = partsByConv.get(id) || [];
       const otherParticipant = parts.find((p) => p.userId !== userId);
-      const latest = latestByConv.get(conv.id);
 
       return {
-        ...conv,
+        id,
+        name: conv.name,
+        type: conv.type,
+        avatar: conv.avatar,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
         displayName:
           conv.type === "direct"
             ? otherParticipant?.userName || "Unknown"
             : conv.name || "Group Chat",
-        displayAvatar:
-          conv.type === "direct"
-            ? otherParticipant?.userAvatar
-            : conv.avatar,
+        displayAvatar: conv.type === "direct" ? otherParticipant?.userAvatar : conv.avatar,
         participants: parts,
-        latestMessage: latest
+        unreadCount: Number(conv.unreadCount ?? 0),
+        latestMessage: conv.lastMessageAt
           ? {
-              content: latest.content,
-              createdAt: latest.createdAt,
-              senderId: latest.senderId,
+              content: conv.lastMessageContent as string,
+              createdAt: conv.lastMessageAt,
+              senderId: Number(conv.lastMessageSenderId),
             }
           : null,
       };
@@ -109,19 +209,7 @@ export const conversationRouter = createRouter({
       const db = getDb();
       const userId = ctx.user.id;
 
-      // Verify user is participant
-      const [participant] = await db
-        .select()
-        .from(conversationParticipants)
-        .where(
-          and(
-            eq(conversationParticipants.conversationId, input.id),
-            eq(conversationParticipants.userId, userId)
-          )
-        )
-        .limit(1);
-
-      if (!participant) return null;
+      if (!(await isParticipant(userId, input.id, db))) return null;
 
       const [conv] = await db
         .select()
@@ -157,46 +245,60 @@ export const conversationRouter = createRouter({
       };
     }),
 
-  createDirect: authedQuery
-    .input(z.object({ otherUserId: z.number() }))
+  createDirect: rateLimited("conversation.createDirect", Limits.createDirect)
+    .input(z.object({ otherUserId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const userId = ctx.user.id;
 
-      // Check if direct conversation already exists
-      const existingParticipants = await db
-        .select({
-          conversationId: conversationParticipants.conversationId,
-          userId: conversationParticipants.userId,
-        })
-        .from(conversationParticipants)
-        .where(
-          inArray(conversationParticipants.userId, [userId, input.otherUserId])
-        );
+      if (input.otherUserId === userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot open a direct conversation with yourself",
+        });
+      }
 
-      const convIds1 = existingParticipants
-        .filter((p) => p.userId === userId)
-        .map((p) => p.conversationId);
-      const convIds2 = existingParticipants
-        .filter((p) => p.userId === input.otherUserId)
-        .map((p) => p.conversationId);
+      // S-9. The id used to be written straight into conversation_participants
+      // with no existence check, and a user who had blocked the caller could
+      // still be pulled into a conversation with them.
+      await assertUsersExist([input.otherUserId], db);
+      await assertNotBlocked(userId, [input.otherUserId], db);
 
-      const commonConvId = convIds1.find((id) => convIds2.includes(id));
-      if (commonConvId) {
+      // S-9. The old lookup collected every conversation the two share, took
+      // the *first* of them, and only then filtered on type='direct'. When the
+      // pair also shared a group and that group sorted first, the filter missed
+      // and a duplicate DM was created on every call. Filtering inside the
+      // query makes the lookup idempotent.
+      const [existing] = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .innerJoin(
+          conversationParticipants,
+          and(
+            eq(conversationParticipants.conversationId, conversations.id),
+            eq(conversationParticipants.userId, userId)
+          )
+        )
+        .innerJoin(
+          otherMember,
+          and(
+            eq(otherMember.conversationId, conversations.id),
+            eq(otherMember.userId, input.otherUserId)
+          )
+        )
+        .where(eq(conversations.type, "direct"))
+        .orderBy(conversations.id)
+        .limit(1);
+
+      if (existing) {
         const [conv] = await db
           .select()
           .from(conversations)
-          .where(
-            and(
-              eq(conversations.id, commonConvId),
-              eq(conversations.type, "direct")
-            )
-          )
+          .where(eq(conversations.id, existing.id))
           .limit(1);
         if (conv) return conv;
       }
 
-      // Create new direct conversation
       const [newConv] = await db.insert(conversations).values({
         type: "direct",
         createdBy: userId,
@@ -209,19 +311,44 @@ export const conversationRouter = createRouter({
         { conversationId: convId, userId: input.otherUserId },
       ]);
 
-      return { id: convId, type: "direct" as const, createdBy: userId };
+      const [created] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, convId))
+        .limit(1);
+
+      return created;
     }),
 
-  createGroup: authedQuery
+  createGroup: rateLimited("conversation.createGroup", Limits.createGroup)
     .input(
       z.object({
-        name: z.string().min(1).max(100),
-        participantIds: z.array(z.number()).min(1),
+        name: z.string().trim().min(1).max(100),
+        participantIds: z
+          .array(z.number().int().positive())
+          .min(1)
+          // The creator is always a member, so the array itself may hold at
+          // most one fewer than the conversation cap.
+          .max(MAX_CONVERSATION_PARTICIPANTS - 1),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const userId = ctx.user.id;
+
+      const invited = [...new Set(input.participantIds)].filter((id) => id !== userId);
+      if (invited.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "A group needs at least one other member",
+        });
+      }
+
+      // S-9. Every id was previously written verbatim: unknown ids became
+      // orphan rows, and a user who had blocked the caller could be added to a
+      // group by them and then messaged.
+      await assertUsersExist(invited, db);
+      await assertNotBlocked(userId, invited, db);
 
       const [newConv] = await db.insert(conversations).values({
         name: input.name,
@@ -231,7 +358,7 @@ export const conversationRouter = createRouter({
 
       const convId = Number(newConv.insertId);
 
-      const allParticipantIds = [...new Set([userId, ...input.participantIds])];
+      const allParticipantIds = [userId, ...invited];
       await db.insert(conversationParticipants).values(
         allParticipantIds.map((id) => ({
           conversationId: convId,
@@ -240,6 +367,211 @@ export const conversationRouter = createRouter({
       );
 
       return { id: convId, name: input.name, type: "group" as const };
+    }),
+
+  // ─── Group administration (F-7) ─────────────────────────────────────────
+
+  rename: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        name: z.string().trim().min(1).max(100),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      await db
+        .update(conversations)
+        .set({ name: input.name })
+        .where(eq(conversations.id, input.conversationId));
+
+      await announceConversationChange(input.conversationId, db);
+      return { id: input.conversationId, name: input.name };
+    }),
+
+  setAvatar: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        // Nullable so the owner can clear it. F-4 replaces this with an upload
+        // handle; until then it accepts a URL the client already has.
+        avatar: z.string().trim().max(2048).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      await db
+        .update(conversations)
+        .set({ avatar: input.avatar })
+        .where(eq(conversations.id, input.conversationId));
+
+      await announceConversationChange(input.conversationId, db);
+      return { id: input.conversationId, avatar: input.avatar };
+    }),
+
+  addParticipants: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        userIds: z
+          .array(z.number().int().positive())
+          .min(1)
+          .max(MAX_CONVERSATION_PARTICIPANTS - 1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+      await assertGroupOwner(userId, input.conversationId, db);
+
+      const existing = await db
+        .select({ userId: conversationParticipants.userId })
+        .from(conversationParticipants)
+        .where(eq(conversationParticipants.conversationId, input.conversationId));
+
+      const current = new Set(existing.map((row) => row.userId));
+      const invited = [...new Set(input.userIds)].filter((id) => !current.has(id));
+
+      if (invited.length === 0) {
+        // Everyone named is already in. Nothing to do, and nothing to tell the
+        // other members about.
+        return { added: [] as number[] };
+      }
+
+      if (current.size + invited.length > MAX_CONVERSATION_PARTICIPANTS) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `A conversation may hold at most ${MAX_CONVERSATION_PARTICIPANTS} members`,
+        });
+      }
+
+      // The same validation S-9 applies at creation — existence and blocking —
+      // rather than a second implementation of it.
+      await assertUsersExist(invited, db);
+      await assertNotBlocked(userId, invited, db);
+
+      await db
+        .insert(conversationParticipants)
+        .values(invited.map((id) => ({ conversationId: input.conversationId, userId: id })));
+
+      await announceConversationChange(input.conversationId, db);
+      return { added: invited };
+    }),
+
+  removeParticipant: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        userId: z.number().int().positive(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      if (input.userId === ctx.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Use leave, or transfer ownership first",
+        });
+      }
+
+      // Tell them while they are still a member — after the delete they are no
+      // longer in the fan-out audience.
+      await emitToMembers(input.conversationId, "conversationUpdated", {
+        conversationId: input.conversationId,
+      });
+
+      await db
+        .delete(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.userId, input.userId)
+          )
+        );
+
+      await announceConversationChange(input.conversationId, db);
+      return { removed: input.userId };
+    }),
+
+  transferOwnership: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        newOwnerId: z.number().int().positive(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      if (input.newOwnerId === ctx.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "You already own this group",
+        });
+      }
+
+      // The new owner must already be a member: FK-10 is RESTRICT precisely so
+      // ownership is always held by someone real and present.
+      if (!(await isParticipant(input.newOwnerId, input.conversationId, db))) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "The new owner must be a member of the group",
+        });
+      }
+
+      await db
+        .update(conversations)
+        .set({ createdBy: input.newOwnerId })
+        .where(eq(conversations.id, input.conversationId));
+
+      await announceConversationChange(input.conversationId, db);
+      return { ownerId: input.newOwnerId };
+    }),
+
+  leave: authedQuery
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+
+      const conversation = await loadGroup(input.conversationId, db);
+      await assertParticipant(userId, input.conversationId, db);
+
+      const members = await db
+        .select({ userId: conversationParticipants.userId })
+        .from(conversationParticipants)
+        .where(eq(conversationParticipants.conversationId, input.conversationId));
+
+      // An owner walking out would leave the group unadministrable, so they
+      // hand it over first. The last member is the exception: there is nobody
+      // to hand it to, and an empty group appears in no one's list.
+      if (conversation.createdBy === userId && members.length > 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Transfer ownership before leaving the group",
+        });
+      }
+
+      await db
+        .delete(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.userId, userId)
+          )
+        );
+
+      // Announced after the delete, so the leaver is not in the audience —
+      // their client removes the conversation on its own.
+      await announceConversationChange(input.conversationId, db);
+      return { left: input.conversationId };
     }),
 
   markAsRead: authedQuery

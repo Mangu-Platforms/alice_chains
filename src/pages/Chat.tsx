@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/providers/trpc";
 import { useNavigate } from "react-router";
 import {
@@ -13,24 +15,71 @@ import {
   Users,
   LogOut,
   Send,
+  Images,
   Paperclip,
   Check,
   CheckCheck,
   UserPlus,
   Menu,
   X,
+  Pencil,
+  Trash2,
+  SmilePlus,
+  Reply,
+  FileText,
+  Bell,
+  BellOff,
+  Settings,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { format } from "date-fns";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { t, formatTime, formatMessageTimestamp } from "@/i18n";
+import { LiveRegion } from "@/components/LiveRegion";
+import { Linkify } from "@/lib/linkify";
+import { ConnectionBanner } from "@/components/ConnectionBanner";
+import { Outbox, type OutboxEntry } from "@/lib/outbox";
+import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
+import { EmojiPicker } from "@/components/EmojiPicker";
+import { MediaDrawer } from "@/components/MediaDrawer";
+import {
+  counterState,
+  filesFromClipboard,
+  insertAtCaret,
+} from "@/lib/composer";
+import { REACTION_EMOJI } from "@contracts/reactions";
+import {
+  ALLOWED_MIME_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  formatBytes,
+  isAllowedMimeType,
+} from "@contracts/attachments";
+
+/** Matches `max-h-[120px]` on the composer; the two must agree. */
+const COMPOSER_MAX_HEIGHT = 120;
+
+/**
+ * How long a jumped-to message stays highlighted (P-UX-4). Long enough to
+ * find with the eye after the scroll settles, short enough not to become
+ * part of the page.
+ */
+const JUMP_HIGHLIGHT_MS = 1600;
 
 export default function Chat() {
   const { user, logout } = useAuth();
@@ -41,12 +90,45 @@ export default function Chat() {
     : null;
 
   const socket = useSocket();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // F-6. Permission is requested from a control the member pressed, never on
+  // load — a prompt fired at arrival is the fastest route to a permanent no.
+  const push = usePushNotifications();
+  // P-PROF-2. The sidebar reset on every navigation. It is a preference, not
+  // state, so it is remembered.
+  const [sidebarOpen, setSidebarOpen] = usePersistedState("sidebar-open", true);
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
+  // F-2. The message currently being edited in place, and its draft body.
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  // F-5. The message the composer is currently replying to, if any.
+  // S-20. What a screen reader should be told about, most recently. Rendered
+  // into a polite live region below.
+  const [announcement, setAnnouncement] = useState<string | null>(null);
+  // P-SEARCH. The header's search icon was a stub S-20 removed rather than
+  // leave lying; this is what brings it back, live.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(
+    null
+  );
+  const [messageQuery, setMessageQuery] = useState("");
+  const [searchEverywhere, setSearchEverywhere] = useState(false);
+
+  // P-UX-2. One outbox per mounted Chat. A ref rather than state because the
+  // queue is the source of truth and `pending` is just a render of it.
+  const outboxRef = useRef(new Outbox());
+  const [pending, setPending] = useState<OutboxEntry[]>([]);
+  useEffect(() => outboxRef.current.subscribe(setPending), []);
+  const [replyingTo, setReplyingTo] = useState<{
+    id: number;
+    content: string;
+    senderName: string | null;
+  } | null>(null);
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
 
   // tRPC queries
@@ -64,6 +146,233 @@ export default function Chat() {
       { enabled: !!activeConversationId }
     );
 
+  // F-1. Opening a conversation clears its badge. This writes
+  // `conversation_participants.lastReadAt`, which is what `conversation.list`
+  // counts from — the socket `markAsRead` writes per-message receipts for the
+  // sender's delivery ticks and does not move the read marker.
+  const markConversationRead = trpc.conversation.markAsRead.useMutation({
+    onSuccess: () => refetchConversations(),
+  });
+
+  // Depends on `.mutate`, which is stable across renders, rather than on the
+  // mutation object, which is not — depending on the object would re-run the
+  // effect below on every render and mark the conversation read in a loop.
+  const { mutate: sendMarkRead } = markConversationRead;
+  const markActiveConversationRead = useCallback(() => {
+    if (!activeConversationId) return;
+    sendMarkRead({ conversationId: activeConversationId });
+  }, [activeConversationId, sendMarkRead]);
+
+  useEffect(() => {
+    markActiveConversationRead();
+  }, [markActiveConversationRead]);
+
+  const editMessage = trpc.message.edit.useMutation({
+    onSuccess: () => {
+      setEditingMessageId(null);
+      setEditDraft("");
+      refetchMessages();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  // F-3. The server decides add-vs-remove from what is stored, so the client
+  // sends only the emoji and re-renders from the summary that comes back.
+  // F-7. Group administration lives behind the header menu; every mutation
+  // refetches the conversation and the sidebar, and the server also fans out
+  // `conversationUpdated` so other members converge without acting.
+  // F-4. The paperclip was a button that did nothing. It now runs the
+  // three-step upload the server expects: ask for a target, PUT the bytes
+  // straight to storage, then send a message naming the attachment.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState("");
+
+  const trimmedMessageQuery = messageQuery.trim();
+  const messageQueryIsSearchable =
+    trimmedMessageQuery.length >= MIN_SEARCH_QUERY_LENGTH;
+  const messageSearch = trpc.message.search.useQuery(
+    {
+      query: trimmedMessageQuery,
+      conversationId:
+        searchEverywhere || !activeConversationId ? undefined : activeConversationId,
+    },
+    { enabled: searchOpen && messageQueryIsSearchable }
+  );
+
+  const { data: blockedContacts, refetch: refetchBlocked } =
+    trpc.contact.blocked.useQuery();
+  // Only accepted contacts can be added to a group, so the picker below shows
+  // exactly the people the caller could legitimately invite.
+  const { data: contacts } = trpc.contact.list.useQuery();
+
+  const blockUser = trpc.contact.block.useMutation({
+    onSuccess: () => {
+      toast.success("Blocked. They can no longer message you.");
+      refetchBlocked();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const unblockUser = trpc.contact.unblock.useMutation({
+    onSuccess: () => {
+      toast.success("Unblocked.");
+      refetchBlocked();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const utils = trpc.useUtils();
+  const createUpload = trpc.attachment.createUpload.useMutation();
+  const completeUpload = trpc.attachment.complete.useMutation();
+  const sendWithAttachment = trpc.message.send.useMutation({
+    onSuccess: () => {
+      refetchMessages();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const handleFilesSelected = useCallback(
+    async (files: ArrayLike<File> | null) => {
+      if (!files?.length || !activeConversationId) return;
+      const file = files[0];
+
+      if (!isAllowedMimeType(file.type)) {
+        toast.error(`${file.type || "That file type"} cannot be attached.`);
+        return;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        toast.error(`Files must be ${formatBytes(MAX_ATTACHMENT_BYTES)} or smaller.`);
+        return;
+      }
+
+      setUploading(true);
+      try {
+        const target = await createUpload.mutateAsync({
+          conversationId: activeConversationId,
+          fileName: file.name,
+          mimeType: file.type as never,
+          byteSize: file.size,
+        });
+
+        // Straight to storage. With STORAGE_DRIVER=s3 this leaves the app
+        // entirely; with the local driver it hits the signed upload endpoint.
+        const put = await fetch(target.uploadUrl, {
+          method: "PUT",
+          headers: target.headers,
+          body: file,
+        });
+        if (!put.ok) throw new Error("The upload failed. Please try again.");
+
+        await completeUpload.mutateAsync({ attachmentId: target.attachmentId });
+
+        // Sent over tRPC rather than the socket, because only this path can
+        // carry an attachment id; the server fans the message out either way.
+        await sendWithAttachment.mutateAsync({
+          conversationId: activeConversationId,
+          content: messageInput.trim(),
+          attachmentIds: [target.attachmentId],
+          replyToId: replyingTo?.id,
+        });
+
+        setMessageInput("");
+        setReplyingTo(null);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "The upload failed.");
+      } finally {
+        setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    },
+    [
+      activeConversationId,
+      createUpload,
+      completeUpload,
+      sendWithAttachment,
+      messageInput,
+      replyingTo,
+    ]
+  );
+  const afterGroupChange = (message: string) => () => {
+    toast.success(message);
+    utils.conversation.getById.invalidate();
+    refetchConversations();
+  };
+  const onGroupError = (error: { message: string }) => toast.error(error.message);
+
+  const renameGroup = trpc.conversation.rename.useMutation({
+    onSuccess: () => {
+      setGroupDialogOpen(false);
+      afterGroupChange("Group renamed")();
+    },
+    onError: onGroupError,
+  });
+  const addParticipants = trpc.conversation.addParticipants.useMutation({
+    onSuccess: afterGroupChange("Member added"),
+    onError: onGroupError,
+  });
+  const removeParticipant = trpc.conversation.removeParticipant.useMutation({
+    onSuccess: afterGroupChange("Member removed"),
+    onError: onGroupError,
+  });
+  const transferOwnership = trpc.conversation.transferOwnership.useMutation({
+    onSuccess: afterGroupChange("Ownership transferred"),
+    onError: onGroupError,
+  });
+  const leaveGroup = trpc.conversation.leave.useMutation({
+    onSuccess: () => {
+      setGroupDialogOpen(false);
+      toast.success("You left the group");
+      setSearchParams({});
+      refetchConversations();
+    },
+    onError: onGroupError,
+  });
+
+  const react = trpc.message.react.useMutation({
+    onSuccess: () => refetchMessages(),
+    onError: (error) => toast.error(error.message),
+  });
+
+  const deleteMessage = trpc.message.delete.useMutation({
+    onSuccess: () => {
+      setPendingDeleteId(null);
+      refetchMessages();
+      refetchConversations();
+    },
+    onError: (error) => {
+      setPendingDeleteId(null);
+      toast.error(error.message);
+    },
+  });
+
+  const startEditing = (id: number, content: string) => {
+    setEditingMessageId(id);
+    setEditDraft(content);
+  };
+
+  const cancelEditing = () => {
+    setEditingMessageId(null);
+    setEditDraft("");
+  };
+
+  const submitEdit = () => {
+    const content = editDraft.trim();
+    if (!editingMessageId) return;
+    if (!content) {
+      toast.error("A message cannot be empty. Delete it instead.");
+      return;
+    }
+    editMessage.mutate({ messageId: editingMessageId, content });
+  };
+
   // Join socket room for active conversation
   useEffect(() => {
     if (activeConversationId && user) {
@@ -78,17 +387,82 @@ export default function Chat() {
   // Listen for new messages
   useEffect(() => {
     const cleanup = socket.onNewMessage((message) => {
+      // P-UX-2. The echo is the acknowledgement: a replay the server had
+      // already applied is removed rather than sent again.
+      if (message.tempId) outboxRef.current.acknowledge(message.tempId);
+
       if (message.conversationId === activeConversationId) {
         refetchMessages();
-        // Mark as read immediately if we're in the conversation
         if (message.senderId !== user?.id) {
+          // The DOM changes silently for a screen reader user, so say it.
+          setAnnouncement(
+            t("live.newMessageFrom", conversations?.find((c) => c.id === message.conversationId)
+              ?.participants.find((p) => p.userId === message.senderId)?.userName ?? "someone")
+          );
+          // Two writes, two purposes: the receipt drives the sender's read
+          // ticks, the read marker drives our own unread badge.
           socket.markAsRead([message.id], message.conversationId);
+          markActiveConversationRead();
         }
       }
       refetchConversations();
     });
     return cleanup;
-  }, [activeConversationId, socket, refetchMessages, refetchConversations, user]);
+  }, [
+    activeConversationId,
+    socket,
+    refetchMessages,
+    refetchConversations,
+    user,
+    markActiveConversationRead,
+  ]);
+
+  // F-2. Edits and deletes originate on the tRPC path and are fanned out by
+  // the server, so an open client converges without polling.
+  useEffect(() => {
+    const cleanupUpdated = socket.onMessageUpdated((data) => {
+      if (data.conversationId === activeConversationId) refetchMessages();
+    });
+    const cleanupDeleted = socket.onMessageDeleted((data) => {
+      if (data.conversationId === activeConversationId) refetchMessages();
+      // The sidebar preview may have been that message.
+      refetchConversations();
+    });
+    // S-13. A refused send is silent on the wire; without this the composer
+    // clears and the message simply never appears.
+    const cleanupRateLimited = socket.socket?.on("rateLimited", (data: { retryAfterMs: number }) => {
+      toast.error(
+        `You are sending too fast. Try again in ${Math.ceil(data.retryAfterMs / 1000)}s.`
+      );
+    });
+    void cleanupRateLimited;
+    // A refusal is final for that message: it must leave the queue, or the
+    // next reconnect replays something the server has already said no to.
+    socket.socket?.on(
+      "messageError",
+      (data: { error: string; tempId?: string }) => {
+        if (data.tempId) outboxRef.current.fail(data.tempId);
+        toast.error(data.error);
+      }
+    );
+    // S-14. Only ever a client bug, so it is logged rather than shown — but it
+    // is logged, because silence here is how a shape mismatch survives a
+    // release.
+    socket.socket?.on("invalidPayload", (data: { event: string; message: string }) => {
+      console.error(`Server rejected "${data.event}": ${data.message}`);
+    });
+    const cleanupReaction = socket.onReactionUpdated((data) => {
+      if (data.conversationId === activeConversationId) refetchMessages();
+    });
+    return () => {
+      cleanupUpdated();
+      cleanupDeleted();
+      cleanupReaction();
+      socket.socket?.off("rateLimited");
+      socket.socket?.off("invalidPayload");
+      socket.socket?.off("messageError");
+    };
+  }, [activeConversationId, socket, refetchMessages, refetchConversations]);
 
   // Listen for conversation updates
   useEffect(() => {
@@ -143,6 +517,48 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── P-UX-4 · going to a message ─────────────────────────────────────────
+  // A jump is queued rather than performed, because the target is often in a
+  // conversation that is not open yet: `selectConversation` changes the query
+  // key, and the messages arrive a round trip later. The effect below fires
+  // once they do — and, being declared after the scroll-to-bottom effect
+  // above, its scroll is the one that lands.
+  const [pendingJumpId, setPendingJumpId] = useState<number | null>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (pendingJumpId === null || !messages) return;
+
+    const node = document.querySelector<HTMLElement>(
+      `[data-message-id="${pendingJumpId}"]`
+    );
+    setPendingJumpId(null);
+
+    if (!node) {
+      // The thread renders the most recent 50 messages, so a hit from further
+      // back is simply not on the page. Saying so beats a click that appears
+      // to do nothing.
+      toast.info(t("media.messageNotLoaded"));
+      return;
+    }
+
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedMessageId(pendingJumpId);
+
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(
+      () => setHighlightedMessageId(null),
+      JUMP_HIGHLIGHT_MS
+    );
+  }, [pendingJumpId, messages]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    },
+    []
+  );
+
   // Handle mobile
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -152,16 +568,61 @@ export default function Chat() {
   }, []);
 
   const handleSendMessage = useCallback(() => {
-    if (!messageInput.trim() || !activeConversationId) return;
+    const content = messageInput.trim();
+    if (!content || !activeConversationId) return;
 
-    socket.sendMessage({
+    // P-UX-3. The cap belongs to the server, but sending something it will
+    // certainly reject only to surface the rejection as a failed send is a
+    // worse answer than declining here, next to the counter that says why.
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      toast.error(t("composer.tooLong", MAX_MESSAGE_LENGTH));
+      return;
+    }
+
+    // P-UX-2. Everything goes through the outbox, connected or not — so the
+    // send path is one path, and "sent" always means "the server echoed the
+    // tempId back". Previously an emit into a dead socket looked identical to
+    // a successful one and the message was simply lost.
+    const entry = outboxRef.current.enqueue({
       conversationId: activeConversationId,
-      content: messageInput.trim(),
-      type: "text",
+      content,
+      replyToId: replyingTo?.id,
     });
 
+    if (socket.isConnected) {
+      socket.sendMessage({
+        conversationId: activeConversationId,
+        content,
+        type: "text",
+        replyToId: replyingTo?.id,
+        tempId: entry.tempId,
+      });
+    }
+
     setMessageInput("");
-  }, [messageInput, activeConversationId, socket]);
+    setReplyingTo(null);
+  }, [messageInput, activeConversationId, socket, replyingTo]);
+
+  // Replay on reconnect, oldest first, and tell the member about anything the
+  // queue gave up on rather than dropping it in silence.
+  useEffect(() => {
+    if (!socket.isConnected) return;
+
+    const dropped = outboxRef.current.drain();
+    for (const entry of dropped) {
+      toast.error(`Could not send "${entry.content.slice(0, 40)}". Please try again.`);
+    }
+
+    for (const entry of outboxRef.current.takeForReplay()) {
+      socket.sendMessage({
+        conversationId: entry.conversationId,
+        content: entry.content,
+        type: "text",
+        replyToId: entry.replyToId,
+        tempId: entry.tempId,
+      });
+    }
+  }, [socket.isConnected, socket]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -183,9 +644,72 @@ export default function Chat() {
     [activeConversationId, socket]
   );
 
+  // ── P-UX-3 · the composer ───────────────────────────────────────────────
+  // The cap was enforced only by the server, so the first a member heard of it
+  // was a rejection after they had finished writing.
+  const counter = counterState(messageInput.length);
+
+  /** Insert an emoji where the caret is, then put the caret after it. */
+  const insertEmoji = useCallback((emoji: string) => {
+    const field = composerRef.current;
+    const next = insertAtCaret(
+      messageInput,
+      field?.selectionStart ?? null,
+      field?.selectionEnd ?? null,
+      emoji
+    );
+
+    setMessageInput(next.value);
+
+    // Focus returns to the message, not the picker's trigger — otherwise
+    // inserting two emoji in a row means reaching for the mouse between them.
+    requestAnimationFrame(() => {
+      field?.focus();
+      field?.setSelectionRange(next.caret, next.caret);
+    });
+  }, [messageInput]);
+
+  /**
+   * A pasted image goes straight into F-4's upload path. A paste with no files
+   * is left entirely alone, so pasting text still behaves like pasting text.
+   */
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = filesFromClipboard(event.clipboardData);
+      if (files.length === 0) return;
+
+      event.preventDefault();
+      void handleFilesSelected(files);
+    },
+    [handleFilesSelected]
+  );
+
+  // Shift+Enter inserts a newline; a fixed-height box hides it. Grow to fit,
+  // up to the same ceiling the stylesheet sets, then let it scroll.
+  useEffect(() => {
+    const field = composerRef.current;
+    if (!field) return;
+    field.style.height = "auto";
+    field.style.height = `${Math.min(field.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }, [messageInput]);
+
   const selectConversation = (id: number) => {
     setSearchParams({ c: id.toString() });
+    const opened = conversations?.find((c) => c.id === id);
+    setAnnouncement(t("live.conversationOpened", opened?.displayName ?? ""));
+    // A reply target belongs to the conversation it came from; carrying it
+    // across would be rejected by the server (FR-MSG-15) and confusing here.
+    setReplyingTo(null);
+    setEditingMessageId(null);
     if (isMobile) setSidebarOpen(false);
+  };
+
+  /** Open the conversation a message lives in, then go to the message. */
+  const jumpToMessage = (messageId: number, conversationId?: number) => {
+    if (conversationId !== undefined && conversationId !== activeConversationId) {
+      selectConversation(conversationId);
+    }
+    setPendingJumpId(messageId);
   };
 
   const filteredConversations = conversations?.filter((conv) =>
@@ -194,8 +718,26 @@ export default function Chat() {
 
   const isUserOnline = (userId: number) => onlineUsers.has(userId);
 
+  // F-8. Blocking is a person-to-person act, so it is only offered on a direct
+  // conversation — there is no single "other member" of a group to block.
+  const otherMemberId =
+    activeConversation?.type === "direct"
+      ? (activeConversation.participants.find((p) => p.userId !== user?.id)?.userId ??
+        null)
+      : null;
+  const isOtherMemberBlocked =
+    otherMemberId !== null &&
+    (blockedContacts ?? []).some((b) => b.contactUserId === otherMemberId);
+
+  const isGroup = activeConversation?.type === "group";
+  const isGroupOwner = isGroup && activeConversation?.createdBy === user?.id;
+  const contactsNotInGroup = (contacts ?? []).filter(
+    (c) => !activeConversation?.participants.some((p) => p.userId === c.contactUserId)
+  );
+
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
+      <LiveRegion message={announcement} />
       {/* Sidebar */}
       <aside
         className={`${
@@ -216,7 +758,7 @@ export default function Chat() {
               <div>
                 <h1 className="font-bold text-lg leading-tight">Alice Chains</h1>
                 <p className="text-xs text-muted-foreground">
-                  {onlineUsers.size} online
+                  {t("count.onlineNow", onlineUsers.size)}
                 </p>
               </div>
             </div>
@@ -224,6 +766,7 @@ export default function Chat() {
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={t("a11y.closeSidebar")}
                 onClick={() => setSidebarOpen(false)}
               >
                 <X className="w-5 h-5" />
@@ -244,10 +787,19 @@ export default function Chat() {
 
         {/* Conversations List */}
         <ScrollArea className="flex-1">
-          <div className="p-2 space-y-1">
+          {/*
+            S-20. A list of buttons, marked up as a list. Without the roles a
+            screen reader reads eleven unrelated buttons; with them it says
+            "list, eleven items" and offers list navigation. `aria-current`
+            is what tells the reader which conversation is open — the visual
+            highlight alone says nothing.
+          */}
+          <div className="p-2 space-y-1" role="list" aria-label="Conversations">
             {filteredConversations?.map((conv) => (
               <button
                 key={conv.id}
+                role="listitem"
+                aria-current={activeConversationId === conv.id ? "true" : undefined}
                 onClick={() => selectConversation(conv.id)}
                 className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-150 text-left group ${
                   activeConversationId === conv.id
@@ -271,36 +823,89 @@ export default function Chat() {
                     )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-sm truncate">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`text-sm truncate ${
+                        conv.unreadCount > 0 ? "font-semibold" : "font-medium"
+                      }`}
+                    >
                       {conv.displayName}
                     </span>
                     {conv.latestMessage && (
-                      <span className="text-[11px] text-muted-foreground flex-shrink-0 ml-2">
-                        {format(new Date(conv.latestMessage.createdAt), "HH:mm")}
+                      <span className="text-[11px] text-muted-foreground flex-shrink-0">
+                        {formatMessageTimestamp(conv.latestMessage.createdAt)}
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate mt-0.5">
-                    {conv.latestMessage
-                      ? `${
-                          conv.latestMessage.senderId === user?.id
-                            ? "You: "
-                            : ""
-                        }${conv.latestMessage.content}`
-                      : "No messages yet"}
-                  </p>
+                  <div className="flex items-center justify-between gap-2 mt-0.5">
+                    <p
+                      className={`text-xs truncate ${
+                        conv.unreadCount > 0
+                          ? "text-foreground/80"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {conv.latestMessage
+                        ? `${
+                            conv.latestMessage.senderId === user?.id
+                              ? "You: "
+                              : ""
+                          }${conv.latestMessage.content}`
+                        : t("status.noMessagesYet")}
+                    </p>
+                    {conv.unreadCount > 0 && (
+                      // A bare number means nothing to a screen reader, so the
+                      // visible glyph is hidden from it and the label carries
+                      // the meaning.
+                      <span
+                        className="flex-shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-[11px] font-semibold flex items-center justify-center tabular-nums"
+                        aria-label={t("count.unreadMessages", conv.unreadCount)}
+                      >
+                        <span aria-hidden="true">
+                          {conv.unreadCount > 99 ? "99+" : conv.unreadCount}
+                        </span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               </button>
             ))}
 
             {filteredConversations?.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground">
+              <div className="text-center py-12 px-4 text-muted-foreground">
                 <MessageCircle className="w-12 h-12 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No conversations yet</p>
-                <p className="text-xs mt-1">
-                  Start a chat from your contacts
-                </p>
+                {searchQuery ? (
+                  <>
+                    <p className="text-sm font-medium">
+                      {t("empty.noConversationMatches", searchQuery)}
+                    </p>
+                    <p className="text-xs mt-1">
+                      {t("empty.noConversationMatchesHint")}
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => setSearchQuery("")}
+                    >
+                      {t("action.clearSearch")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium">{t("empty.noConversations")}</p>
+                    <p className="text-xs mt-1">{t("empty.noConversationsHint")}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 gap-2"
+                      onClick={() => navigate("/contacts")}
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      {t("action.addContact")}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -320,11 +925,23 @@ export default function Chat() {
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-9 w-9">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label={t("a11y.accountMenu")}
+                >
                   <MoreVertical className="w-4 h-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => navigate("/settings")}
+                  className="gap-2"
+                >
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => navigate("/contacts")}
                   className="gap-2"
@@ -332,6 +949,26 @@ export default function Chat() {
                   <UserPlus className="w-4 h-4" />
                   Add Contact
                 </DropdownMenuItem>
+                {push.available && (
+                  <DropdownMenuItem
+                    onClick={() => (push.subscribed ? push.disable() : push.enable())}
+                    disabled={push.busy || push.permission === "denied"}
+                    className="gap-2"
+                  >
+                    {push.subscribed ? (
+                      <BellOff className="w-4 h-4" />
+                    ) : (
+                      <Bell className="w-4 h-4" />
+                    )}
+                    {push.permission === "denied"
+                      ? "Notifications blocked"
+                      : push.busy
+                        ? "Working…"
+                        : push.subscribed
+                          ? "Turn off notifications"
+                          : "Turn on notifications"}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onClick={logout} className="gap-2 text-destructive">
                   <LogOut className="w-4 h-4" />
                   Sign Out
@@ -352,6 +989,7 @@ export default function Chat() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={t("a11y.openSidebar")}
                   onClick={() => setSidebarOpen(true)}
                 >
                   <Menu className="w-5 h-5" />
@@ -381,32 +1019,94 @@ export default function Chat() {
                         (p) =>
                           p.userId !== user?.id && isUserOnline(p.userId)
                       )
-                      ? "Online"
-                      : "Offline"
-                    : `${activeConversation.participants.length} members`}
+                      ? t("status.online")
+                      : t("status.offline")
+                    : t("count.members", activeConversation.participants.length)}
                 </p>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="hidden sm:flex">
-                  <Phone className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="hidden sm:flex">
-                  <Video className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="icon">
+                {/*
+                  The phone and video icons that used to sit beside this did
+                  nothing when pressed, so S-20 removed them rather than label
+                  a control that lies. They return with P-CALL-1/2. Search is
+                  live as of P-SEARCH-1.
+                */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("a11y.searchMessages")}
+                  aria-expanded={searchOpen}
+                  onClick={() => {
+                    setSearchOpen((open) => !open);
+                    setMessageQuery("");
+                  }}
+                >
                   <Search className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("a11y.openMedia")}
+                  onClick={() => setMediaOpen(true)}
+                >
+                  <Images className="w-4 h-4" />
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={t("a11y.conversationMenu")}
+                    >
                       <MoreVertical className="w-4 h-4" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem>View Profile</DropdownMenuItem>
-                    <DropdownMenuItem>Mute Notifications</DropdownMenuItem>
-                    <DropdownMenuItem className="text-destructive">
-                      Block User
+                    {/*
+                      F-8. "Block User" now blocks. "View Profile" and "Mute
+                      Notifications" were stubs that did nothing when clicked;
+                      they are gone until the tasks that own them ship, because
+                      a control that lies is worse than one that is absent.
+                    */}
+                    {isGroup && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setGroupNameDraft(activeConversation?.name ?? "");
+                          setGroupDialogOpen(true);
+                        }}
+                        className="gap-2"
+                      >
+                        <Users className="w-4 h-4" />
+                        Group settings
+                      </DropdownMenuItem>
+                    )}
+                    {otherMemberId !== null &&
+                      (isOtherMemberBlocked ? (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            unblockUser.mutate({ contactUserId: otherMemberId })
+                          }
+                          disabled={unblockUser.isPending}
+                        >
+                          {unblockUser.isPending ? "Unblocking…" : "Unblock"}
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          className="text-destructive"
+                          onClick={() =>
+                            blockUser.mutate({ contactUserId: otherMemberId })
+                          }
+                          disabled={blockUser.isPending}
+                        >
+                          {blockUser.isPending ? "Blocking…" : "Block user"}
+                        </DropdownMenuItem>
+                      ))}
+                    <DropdownMenuItem
+                      onClick={() => navigate("/contacts")}
+                      className="gap-2"
+                    >
+                      <Users className="w-4 h-4" />
+                      Manage contacts
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -414,8 +1114,137 @@ export default function Chat() {
             </header>
 
             {/* Messages Area */}
+            <ConnectionBanner
+              state={socket.connection}
+              queued={outboxRef.current.size()}
+            />
+
+            {searchOpen && (
+              <div className="border-b border-border bg-card/30 px-4 py-3 space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      value={messageQuery}
+                      onChange={(e) => setMessageQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setSearchOpen(false);
+                      }}
+                      placeholder={
+                        searchEverywhere
+                          ? t("search.placeholderGlobal")
+                          : t("search.placeholderConversation")
+                      }
+                      aria-label={t("a11y.searchMessages")}
+                      className="pl-9 bg-secondary/50 border-0"
+                      autoFocus
+                    />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("a11y.closeSearch")}
+                    onClick={() => setSearchOpen(false)}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs">
+                  {/*
+                    P-SEARCH-2. The same query, two scopes. `aria-pressed`
+                    rather than two links, because this toggles the scope of
+                    what is already on screen.
+                  */}
+                  {[false, true].map((everywhere) => (
+                    <button
+                      key={String(everywhere)}
+                      onClick={() => setSearchEverywhere(everywhere)}
+                      aria-pressed={searchEverywhere === everywhere}
+                      className={`px-2 py-1 rounded-md transition-colors ${
+                        searchEverywhere === everywhere
+                          ? "bg-primary/20 text-primary"
+                          : "text-muted-foreground hover:bg-secondary/60"
+                      }`}
+                    >
+                      {everywhere
+                        ? t("search.scopeEverywhere")
+                        : t("search.scopeThisConversation")}
+                    </button>
+                  ))}
+                  {messageQueryIsSearchable && messageSearch.isSuccess && (
+                    <span className="ml-auto text-muted-foreground" role="status">
+                      {t("search.resultCount", messageSearch.data.length)}
+                    </span>
+                  )}
+                </div>
+
+                <ScrollArea className="max-h-64">
+                  {!messageQueryIsSearchable ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      {t("search.prompt", MIN_SEARCH_QUERY_LENGTH)}
+                    </p>
+                  ) : messageSearch.isPending ? (
+                    <div className="py-4 text-center">
+                      <Spinner className="w-5 h-5 mx-auto" />
+                    </div>
+                  ) : messageSearch.isError ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      {messageSearch.error.message}
+                    </p>
+                  ) : messageSearch.data.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      {t("search.noResults")}
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {messageSearch.data.map((result) => (
+                        <li key={result.id}>
+                          <button
+                            onClick={() => {
+                              // P-UX-4. Previously this opened the
+                              // conversation and left the member to find the
+                              // message they had just searched for.
+                              jumpToMessage(result.id, result.conversationId);
+                              setSearchOpen(false);
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-secondary/60 transition-colors"
+                          >
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-xs font-medium truncate">
+                                {result.senderName || "Unknown"}
+                                {searchEverywhere && (
+                                  <span className="text-muted-foreground font-normal">
+                                    {" · "}
+                                    {result.conversationType === "group"
+                                      ? result.conversationName || "Group"
+                                      : "Direct"}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                                {formatMessageTimestamp(result.createdAt)}
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground truncate mt-0.5">
+                              {result.content}
+                            </p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </ScrollArea>
+              </div>
+            )}
+
             <ScrollArea className="flex-1 px-4">
-              <div className="py-4 space-y-1">
+              {/*
+                A log, not a list: `role="log"` tells a screen reader that
+                entries are appended over time, which is what makes its
+                "read new entries" behaviour work.
+              */}
+              <div className="py-4 space-y-1" role="log" aria-label="Messages">
                 {messages?.map((msg, i) => {
                   const showAvatar =
                     !msg.isMine &&
@@ -426,9 +1255,17 @@ export default function Chat() {
                   return (
                     <div
                       key={msg.id}
+                      // P-UX-4. The anchor a jump scrolls to. It is on the row
+                      // rather than the bubble so the ring encloses the whole
+                      // message, avatar included.
+                      data-message-id={msg.id}
                       className={`flex ${
                         msg.isMine ? "justify-end" : "justify-start"
-                      } mb-1`}
+                      } mb-1 scroll-mt-4 rounded-xl transition-colors duration-500 ${
+                        highlightedMessageId === msg.id
+                          ? "bg-primary/10 ring-1 ring-primary/40"
+                          : ""
+                      }`}
                     >
                       <div
                         className={`flex items-end gap-2 max-w-[75%] ${
@@ -446,7 +1283,7 @@ export default function Chat() {
                           !msg.isMine && <div className="w-7 flex-shrink-0" />
                         )}
                         <div
-                          className={`px-4 py-2 text-sm leading-relaxed ${
+                          className={`group px-4 py-2 text-sm leading-relaxed ${
                             msg.isMine
                               ? "message-bubble-mine"
                               : "message-bubble-theirs"
@@ -457,16 +1294,84 @@ export default function Chat() {
                               {msg.senderName}
                             </p>
                           )}
-                          <p>{msg.content}</p>
+                          {msg.replyToId && !msg.deletedAt && (
+                            <div className="mb-1.5 pl-2 border-l-2 border-current/30 opacity-70">
+                              <p className="text-[11px] font-medium">
+                                {msg.replyToSenderId === user?.id
+                                  ? "You"
+                                  : msg.replyToSenderName || "Unknown"}
+                              </p>
+                              <p className="text-[11px] truncate max-w-[240px]">
+                                {msg.replyToDeletedAt
+                                  ? "Message deleted"
+                                  : msg.replyToContent}
+                              </p>
+                            </div>
+                          )}
+                          {msg.deletedAt ? (
+                            <p className="italic opacity-60">{t("status.messageDeleted")}</p>
+                          ) : editingMessageId === msg.id ? (
+                            <div className="space-y-2">
+                              <Input
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    submitEdit();
+                                  }
+                                  if (e.key === "Escape") cancelEditing();
+                                }}
+                                maxLength={MAX_MESSAGE_LENGTH}
+                                aria-label={t("a11y.editMessage")}
+                                autoFocus
+                                className="h-8 bg-background/40 border-0"
+                              />
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={submitEdit}
+                                  disabled={editMessage.isPending}
+                                >
+                                  {editMessage.isPending ? "Saving…" : "Save"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={cancelEditing}
+                                  disabled={editMessage.isPending}
+                                >
+                                  Cancel
+                                </Button>
+                                <span className="text-[10px] opacity-60">
+                                  Enter to save · Esc to cancel
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            // P-LINK-1. Still text: `Linkify` returns React
+                            // elements from a parsed split, never markup from
+                            // message content, so FR-MSG-18 holds.
+                            <p className="whitespace-pre-wrap break-words">
+                              <Linkify text={msg.content} />
+                            </p>
+                          )}
                           <div
                             className={`flex items-center gap-1 mt-1 ${
                               msg.isMine ? "justify-end" : "justify-start"
                             }`}
                           >
                             <span className="text-[10px] opacity-60">
-                              {format(new Date(msg.createdAt), "HH:mm")}
+                              {formatTime(msg.createdAt)}
                             </span>
-                            {msg.isMine && (
+                            {msg.isEdited && !msg.deletedAt && (
+                              <span className="text-[10px] opacity-60">
+                                {t("status.edited")}
+                              </span>
+                            )}
+                            {msg.isMine && !msg.deletedAt && (
                               <span className="opacity-60">
                                 {msg.readBy && msg.readBy.length > 0 ? (
                                   <CheckCheck className="w-3 h-3" />
@@ -475,12 +1380,187 @@ export default function Chat() {
                                 )}
                               </span>
                             )}
+                            {!msg.deletedAt && editingMessageId !== msg.id && (
+                              <button
+                                onClick={() =>
+                                  setReplyingTo({
+                                    id: msg.id,
+                                    content: msg.content,
+                                    senderName: msg.isMine
+                                      ? "You"
+                                      : msg.senderName,
+                                  })
+                                }
+                                className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
+                                aria-label={t("a11y.replyToMessage")}
+                              >
+                                <Reply className="w-3 h-3" />
+                              </button>
+                            )}
+                            {!msg.deletedAt && editingMessageId !== msg.id && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
+                                    aria-label={t("a11y.addReaction")}
+                                  >
+                                    <SmilePlus className="w-3 h-3" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align={msg.isMine ? "end" : "start"}
+                                  className="flex gap-1 p-1 min-w-0"
+                                >
+                                  {REACTION_EMOJI.map((emoji) => (
+                                    <button
+                                      key={emoji}
+                                      onClick={() =>
+                                        react.mutate({ messageId: msg.id, emoji })
+                                      }
+                                      className="text-lg leading-none p-1.5 rounded-md hover:bg-secondary transition-colors"
+                                      aria-label={t("a11y.reactWith", emoji)}
+                                    >
+                                      {emoji}
+                                    </button>
+                                  ))}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                            {msg.isMine &&
+                              !msg.deletedAt &&
+                              editingMessageId !== msg.id && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
+                                      aria-label={t("a11y.messageActions")}
+                                    >
+                                      <MoreVertical className="w-3 h-3" />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      className="gap-2"
+                                      onClick={() => startEditing(msg.id, msg.content)}
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                      Edit
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="gap-2 text-destructive"
+                                      onClick={() => {
+                                        setPendingDeleteId(msg.id);
+                                        deleteMessage.mutate({ messageId: msg.id });
+                                      }}
+                                      disabled={pendingDeleteId === msg.id}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      {pendingDeleteId === msg.id
+                                        ? "Deleting…"
+                                        : "Delete"}
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
                           </div>
+                          {!msg.deletedAt &&
+                            msg.attachments.map((attachment) =>
+                              attachment.isImage ? (
+                                <a
+                                  key={attachment.id}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block mt-2"
+                                >
+                                  <img
+                                    src={attachment.url}
+                                    alt={attachment.fileName}
+                                    loading="lazy"
+                                    className="rounded-lg max-h-64 max-w-full object-contain bg-background/20"
+                                  />
+                                </a>
+                              ) : (
+                                <a
+                                  key={attachment.id}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download={attachment.fileName}
+                                  className="mt-2 flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/25 hover:bg-background/40 transition-colors"
+                                >
+                                  <FileText className="w-4 h-4 flex-shrink-0" />
+                                  <span className="flex-1 min-w-0 truncate text-xs">
+                                    {attachment.fileName}
+                                  </span>
+                                  <span className="text-[10px] opacity-70 flex-shrink-0">
+                                    {formatBytes(attachment.byteSize)}
+                                  </span>
+                                </a>
+                              )
+                            )}
+                          {msg.reactions.length > 0 && !msg.deletedAt && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {msg.reactions.map((reaction) => (
+                                <button
+                                  key={reaction.emoji}
+                                  onClick={() =>
+                                    react.mutate({
+                                      messageId: msg.id,
+                                      emoji: reaction.emoji as (typeof REACTION_EMOJI)[number],
+                                    })
+                                  }
+                                  className={`flex items-center gap-1 px-1.5 h-6 rounded-full text-[11px] border transition-colors ${
+                                    reaction.mine
+                                      ? "bg-primary/20 border-primary/40"
+                                      : "bg-background/30 border-border/50 hover:bg-background/50"
+                                  }`}
+                                  aria-pressed={reaction.mine}
+                                  aria-label={t(
+                                    "count.reactions",
+                                    reaction.emoji,
+                                    reaction.count,
+                                    reaction.mine
+                                  )}
+                                >
+                                  <span aria-hidden="true">{reaction.emoji}</span>
+                                  <span aria-hidden="true" className="tabular-nums">
+                                    {reaction.count}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
                   );
                 })}
+
+                {/*
+                  Queued sends, shown in place rather than hidden: a member who
+                  typed something offline should see it sitting there rather
+                  than wonder whether it went.
+                */}
+                {pending
+                  .filter((entry) => entry.conversationId === activeConversationId)
+                  .map((entry) => (
+                    <div key={entry.tempId} className="flex justify-end mb-1">
+                      <div className="flex items-end gap-2 max-w-[75%] flex-row-reverse">
+                        <div className="px-4 py-2 text-sm leading-relaxed message-bubble-mine opacity-60">
+                          <p className="whitespace-pre-wrap break-words">
+                            {entry.content}
+                          </p>
+                          <div className="flex items-center gap-1 mt-1 justify-end">
+                            <Clock className="w-3 h-3" aria-hidden="true" />
+                            <span className="text-[10px]">
+                              {socket.isConnected ? "Sending…" : "Waiting to send"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
 
                 {typingUsers.size > 0 && (
                   <div className="flex items-center gap-2 py-2">
@@ -505,18 +1585,261 @@ export default function Chat() {
               </div>
             </ScrollArea>
 
+            {/* F-7 · Group settings */}
+            <Dialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen}>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Group settings</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-5">
+                  <div className="space-y-2">
+                    <label htmlFor="group-name" className="text-sm font-medium">
+                      Name
+                    </label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="group-name"
+                        value={groupNameDraft}
+                        onChange={(e) => setGroupNameDraft(e.target.value)}
+                        maxLength={100}
+                        disabled={!isGroupOwner}
+                        placeholder="Group name"
+                      />
+                      <Button
+                        onClick={() =>
+                          activeConversationId &&
+                          renameGroup.mutate({
+                            conversationId: activeConversationId,
+                            name: groupNameDraft.trim(),
+                          })
+                        }
+                        disabled={
+                          !isGroupOwner ||
+                          renameGroup.isPending ||
+                          !groupNameDraft.trim() ||
+                          groupNameDraft.trim() === activeConversation?.name
+                        }
+                      >
+                        {renameGroup.isPending ? "Saving…" : "Save"}
+                      </Button>
+                    </div>
+                    {!isGroupOwner && (
+                      <p className="text-xs text-muted-foreground">
+                        Only the group owner can change these.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">
+                      Members ({activeConversation?.participants.length ?? 0})
+                    </p>
+                    <ScrollArea className="max-h-48">
+                      <ul className="space-y-1">
+                        {activeConversation?.participants.map((p) => (
+                          <li
+                            key={p.userId}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-secondary/50"
+                          >
+                            <Avatar className="w-7 h-7">
+                              <AvatarImage src={p.userAvatar || undefined} />
+                              <AvatarFallback className="text-[10px] bg-primary/20">
+                                {p.userName?.charAt(0).toUpperCase() || "?"}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="flex-1 text-sm truncate">
+                              {p.userName || "Unknown"}
+                              {p.userId === activeConversation?.createdBy && (
+                                <span className="ml-1.5 text-[10px] text-muted-foreground">
+                                  owner
+                                </span>
+                              )}
+                            </span>
+                            {isGroupOwner && p.userId !== user?.id && (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() =>
+                                    activeConversationId &&
+                                    transferOwnership.mutate({
+                                      conversationId: activeConversationId,
+                                      newOwnerId: p.userId,
+                                    })
+                                  }
+                                  disabled={transferOwnership.isPending}
+                                >
+                                  Make owner
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-destructive"
+                                  aria-label={t("a11y.removeMember", p.userName || "member")}
+                                  onClick={() =>
+                                    activeConversationId &&
+                                    removeParticipant.mutate({
+                                      conversationId: activeConversationId,
+                                      userId: p.userId,
+                                    })
+                                  }
+                                  disabled={removeParticipant.isPending}
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </Button>
+                              </>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </ScrollArea>
+                  </div>
+
+                  {isGroupOwner && (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Add a contact</p>
+                      {contactsNotInGroup.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Everyone in your contacts is already here.
+                        </p>
+                      ) : (
+                        <ScrollArea className="max-h-40">
+                          <ul className="space-y-1">
+                            {contactsNotInGroup.map((c) => (
+                              <li
+                                key={c.contactUserId}
+                                className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-secondary/50"
+                              >
+                                <span className="flex-1 text-sm truncate">
+                                  {c.contactName || "Unknown"}
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() =>
+                                    activeConversationId &&
+                                    addParticipants.mutate({
+                                      conversationId: activeConversationId,
+                                      userIds: [c.contactUserId],
+                                    })
+                                  }
+                                  disabled={addParticipants.isPending}
+                                >
+                                  Add
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        </ScrollArea>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-border">
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-2 text-destructive"
+                      onClick={() =>
+                        activeConversationId &&
+                        leaveGroup.mutate({ conversationId: activeConversationId })
+                      }
+                      disabled={leaveGroup.isPending}
+                    >
+                      <LogOut className="w-4 h-4" />
+                      {leaveGroup.isPending ? "Leaving…" : "Leave group"}
+                    </Button>
+                    {isGroupOwner &&
+                      (activeConversation?.participants.length ?? 0) > 1 && (
+                        <p className="text-xs text-muted-foreground px-3">
+                          Transfer ownership to someone else before you can leave.
+                        </p>
+                      )}
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {activeConversationId !== null && (
+              <MediaDrawer
+                conversationId={activeConversationId}
+                open={mediaOpen}
+                onOpenChange={setMediaOpen}
+                onJumpToMessage={(messageId) => jumpToMessage(messageId)}
+              />
+            )}
+
             {/* Message Input */}
             <div className="p-4 border-t border-border">
+              {replyingTo && (
+                <div className="max-w-4xl mx-auto mb-2 flex items-start gap-2 rounded-lg bg-secondary/50 border-l-2 border-primary px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-medium text-primary">
+                      Replying to {replyingTo.senderName || "Unknown"}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {replyingTo.content}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setReplyingTo(null)}
+                    aria-label={t("a11y.cancelReply")}
+                    className="flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               <div className="flex items-end gap-2 max-w-4xl mx-auto">
-                <Button variant="ghost" size="icon" className="flex-shrink-0">
-                  <Paperclip className="w-5 h-5 text-muted-foreground" />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="sr-only"
+                  accept={ALLOWED_MIME_TYPES.join(",")}
+                  onChange={(e) => handleFilesSelected(e.target.files)}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="flex-shrink-0"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  aria-label={uploading ? t("a11y.uploading") : t("a11y.attachFile")}
+                >
+                  {uploading ? (
+                    <Spinner className="w-5 h-5" />
+                  ) : (
+                    <Paperclip className="w-5 h-5 text-muted-foreground" />
+                  )}
                 </Button>
+                <EmojiPicker onSelect={insertEmoji} />
                 <div className="flex-1 relative">
                   <textarea
+                    ref={composerRef}
                     value={messageInput}
                     onChange={(e) => handleTyping(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type a message..."
+                    onPaste={handlePaste}
+                    aria-describedby={counter.visible ? "composer-counter" : undefined}
+                    onKeyDown={(e) => {
+                      // Escape drops the reply target before it reaches the
+                      // send handler, so the key does something useful whether
+                      // or not a reply is in progress.
+                      if (e.key === "Escape" && replyingTo) {
+                        e.preventDefault();
+                        setReplyingTo(null);
+                        return;
+                      }
+                      handleKeyDown(e);
+                    }}
+                    aria-label={
+                      replyingTo
+                        ? `Reply to ${replyingTo.senderName || "message"}`
+                        : "Type a message"
+                    }
+                    placeholder={
+                      replyingTo ? "Type your reply..." : "Type a message..."
+                    }
                     rows={1}
                     className="w-full resize-none rounded-xl border border-border bg-secondary/50 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 min-h-[44px] max-h-[120px]"
                     style={{ scrollbarWidth: "none" }}
@@ -524,13 +1847,37 @@ export default function Chat() {
                 </div>
                 <Button
                   onClick={handleSendMessage}
-                  disabled={!messageInput.trim()}
+                  disabled={!messageInput.trim() || counter.over}
+                  aria-label={t("a11y.sendMessage")}
                   size="icon"
                   className="flex-shrink-0 rounded-xl h-11 w-11"
                 >
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
+              {counter.visible && (
+                <div className="max-w-4xl mx-auto mt-1 flex justify-end">
+                  <span
+                    id="composer-counter"
+                    className={`text-[11px] tabular-nums ${
+                      counter.over ? "text-destructive" : "text-muted-foreground"
+                    }`}
+                  >
+                    {counter.over
+                      ? t("composer.over", -counter.remaining)
+                      : t("composer.remaining", counter.remaining)}
+                  </span>
+                  {counter.over ? (
+                    <span className="sr-only" role="alert">
+                      {t("composer.overLimit")}
+                    </span>
+                  ) : (
+                    <span className="sr-only" role="status">
+                      {t("composer.nearLimit")}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </>
         ) : (

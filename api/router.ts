@@ -2,6 +2,10 @@ import { authRouter } from "./auth-router";
 import { conversationRouter } from "./conversation-router";
 import { messageRouter } from "./message-router";
 import { contactRouter } from "./contact-router";
+import { attachmentRouter } from "./attachment-router";
+import { pushRouter } from "./push-router";
+import { adminRouter } from "./admin-router";
+import { userRouter } from "./user-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -10,6 +14,10 @@ export const appRouter = createRouter({
   conversation: conversationRouter,
   message: messageRouter,
   contact: contactRouter,
+  attachment: attachmentRouter,
+  push: pushRouter,
+  admin: adminRouter,
+  user: userRouter,
 });
 
 export type AppRouter = typeof appRouter;
