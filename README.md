@@ -95,6 +95,15 @@ TEST_DATABASE_URL=mysql://alice:alice_pw@127.0.0.1:3306/alice_chains_test npm te
 
 Integration and Socket.IO suites need a MySQL database and opt in through `TEST_DATABASE_URL`. Without it they skip rather than fail, so `npm run validate` is green on a machine with no database. See [test/README.md](test/README.md) for which harness layer to reach for.
 
+`docker compose up -d db` provisions `alice_chains_test` automatically via
+`db/init/01-create-test-database.sql`, alongside the dev database — but only
+against a **fresh** volume; MySQL runs `docker-entrypoint-initdb.d` scripts
+once, on first boot. An existing volume from before this script existed needs
+one statement: `docker compose exec db mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e
+"CREATE DATABASE IF NOT EXISTS alice_chains_test; GRANT ALL PRIVILEGES ON
+alice_chains_test.* TO 'alice'@'%';"` (default root password `alice_root`, per
+`docker-compose.yml`).
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request. It brings up a MySQL 8.4 service container, applies migrations, then runs the full gate — typecheck → test → lint → build — followed by the migration verifier and a from-zero migration of an empty database. Because `TEST_DATABASE_URL` is set, the integration and socket suites actually run there rather than skipping.

@@ -181,6 +181,24 @@ npm run validate      # typecheck -> test -> lint -> build
 
 `npm run validate` is the single gate. CI runs exactly it, and no task is finished until it exits 0. Individual steps if you need them: `npm run typecheck`, `npm test`, `npm run lint`, `npm run build`.
 
+That runs green with no database at all — the integration and Socket.IO
+suites opt in through `TEST_DATABASE_URL` and skip rather than fail without
+it. To actually run them locally:
+
+```bash
+TEST_DATABASE_URL=mysql://alice:alice_pw@127.0.0.1:3306/alice_chains_test npm run validate
+```
+
+`docker compose up -d db` provisions `alice_chains_test` itself (P-TOOL-6),
+alongside the dev database, but the test database still needs its own
+migration — it is a separate schema from `DATABASE_URL`'s:
+
+```bash
+DATABASE_URL=mysql://alice:alice_pw@127.0.0.1:3306/alice_chains_test npm run db:migrate
+```
+
+Details, including the harness layers, in [test/README.md](../test/README.md).
+
 ---
 
 ## 8. Troubleshooting

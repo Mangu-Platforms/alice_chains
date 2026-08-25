@@ -11,6 +11,12 @@ services:
       - "3306:3306"
     volumes:
       - db_data:/var/lib/mysql
+      # Runs once against an empty data directory: provisions the test
+      # database `TEST_DATABASE_URL` names, which `MYSQL_DATABASE` above does
+      # not (P-TOOL-6). Only the app's default user/password are handled —
+      # see the script's own comment for what to do if you have overridden
+      # MYSQL_USER.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-alice_root}"]
       interval: 5s
