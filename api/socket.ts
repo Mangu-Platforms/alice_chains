@@ -15,7 +15,12 @@ import {
   messagesBelongToConversation,
   relatedUserIds,
 } from "./lib/authz";
-import { MAX_READ_RECEIPT_BATCH, SOCKET_SESSION_RECHECK_MS } from "@contracts/constants";
+import { SOCKET_SESSION_RECHECK_MS } from "@contracts/constants";
+import {
+  SOCKET_EVENT_SCHEMAS,
+  type SocketEventName,
+  type SocketEventPayload,
+} from "@contracts/socket-events";
 import {
   consume,
   Limits,
@@ -38,6 +43,42 @@ export function getIO() {
 
 export function getOnlineUsers() {
   return new Map(Array.from(onlineUsers, ([id, sockets]) => [id, new Set(sockets)]));
+}
+
+/**
+ * Wrap a handler so its payload is validated before it runs.
+ *
+ * A malformed frame is dropped and reported to the sender, never thrown and
+ * never a disconnect: a buggy client should get a usable error, and a hostile
+ * one should not be able to take a socket down by sending nonsense. The
+ * handler receives a parsed, typed payload, so the type annotation it works
+ * from is finally backed by a runtime check.
+ */
+function validated<E extends SocketEventName>(
+  socket: Socket,
+  event: E,
+  handler: (payload: SocketEventPayload<E>) => void | Promise<void>
+) {
+  return async (raw: unknown) => {
+    const parsed = SOCKET_EVENT_SCHEMAS[event].safeParse(raw);
+
+    if (!parsed.success) {
+      socket.emit("invalidPayload", {
+        event,
+        // The first issue only: a full Zod tree describes the schema, which is
+        // more than a client needs and more than one should be told.
+        message: parsed.error.issues[0]?.message ?? "Invalid payload",
+      });
+      return;
+    }
+
+    try {
+      await handler(parsed.data as SocketEventPayload<E>);
+    } catch (error) {
+      console.error(`Socket handler "${event}" failed:`, error);
+      socket.emit("messageError", { error: "Something went wrong" });
+    }
+  };
 }
 
 /**
@@ -173,33 +214,29 @@ export function initSocket(server: HttpServer) {
     const isMember = (conversationId: number) => isParticipant(userId, conversationId);
 
     // Join a conversation room
-    socket.on("joinConversation", async ({ conversationId }: { conversationId: number }) => {
-      // Silent drop: joining is idempotent and a refused join is not something
-      // a member did wrong.
-      if (!consume("socket.join", userId, Limits.joinConversation).allowed) return;
-      if (await isMember(conversationId)) socket.join(`conv_${conversationId}`);
-    });
+    socket.on(
+      "joinConversation",
+      validated(socket, "joinConversation", async ({ conversationId }) => {
+        // Silent drop: joining is idempotent and a refused join is not
+        // something a member did wrong.
+        if (!consume("socket.join", userId, Limits.joinConversation).allowed) return;
+        if (await isMember(conversationId)) socket.join(`conv_${conversationId}`);
+      })
+    );
 
     // Leave a conversation room
-    socket.on("leaveConversation", ({ conversationId }: { conversationId: number }) => {
-      socket.leave(`conv_${conversationId}`);
-    });
+    socket.on(
+      "leaveConversation",
+      validated(socket, "leaveConversation", ({ conversationId }) => {
+        socket.leave(`conv_${conversationId}`);
+      })
+    );
 
     // Send a message
     socket.on(
       "sendMessage",
-      async (data: {
-        conversationId: number;
-        content: string;
-        type?: string;
-        fileUrl?: string;
-        replyToId?: number;
-        tempId?: string;
-      }) => {
-        try {
-          const userId = socket.data.userId;
-          if (!userId) return;
-
+      validated(socket, "sendMessage", async (data) => {
+        {
           // S-13. Two buckets: one bounds a member's total send rate, the
           // other stops one conversation being flooded. Unlike typing, a
           // refused send is reported — the member needs to know it did not go.
@@ -242,7 +279,7 @@ export function initSocket(server: HttpServer) {
               conversationId: data.conversationId,
               senderId: userId,
               content: data.content,
-              type: (data.type as "text" | "image" | "file") || "text",
+              type: data.type ?? "text",
               fileUrl: data.fileUrl,
               replyToId: data.replyToId,
             });
@@ -303,32 +340,21 @@ export function initSocket(server: HttpServer) {
               hasAttachment: false,
             });
           }
-        } catch (error) {
-          console.error("Error sending message:", error);
-          socket.emit("messageError", { error: "Failed to send message" });
         }
-      }
+      })
     );
 
     // Mark messages as read
     socket.on(
       "markAsRead",
-      async (data: { messageIds: number[]; conversationId: number }) => {
-        try {
-          const userId = socket.data.userId;
-          if (!userId) return;
+      validated(socket, "markAsRead", async (data) => {
+        {
+          // The shape is guaranteed by the schema now; only duplicates within
+          // an otherwise valid list are left to handle.
+          const messageIds = [...new Set(data.messageIds)];
 
-          // The payload arrives untyped over the wire — the TypeScript
-          // annotation vanishes at compile time (S-14 adds Zod schemas for
-          // every event). Guard the shape before touching it.
-          const requested = Array.isArray(data?.messageIds) ? data.messageIds : [];
-          const messageIds = [
-            ...new Set(requested.filter((id) => Number.isInteger(id) && id > 0)),
-          ];
-          if (!messageIds.length || messageIds.length > MAX_READ_RECEIPT_BATCH) return;
           // Silent drop: receipts are best-effort and a missed one costs a tick.
           if (!consume("socket.read", userId, Limits.markAsRead).allowed) return;
-          if (!Number.isInteger(data?.conversationId)) return;
 
           if (!(await isMember(data.conversationId))) return;
 
@@ -351,17 +377,14 @@ export function initSocket(server: HttpServer) {
             messageIds,
             userId,
           });
-        } catch (error) {
-          console.error("Error marking as read:", error);
         }
-      }
+      })
     );
 
     // Typing indicator
     socket.on(
       "typing",
-      async (data: { conversationId: number; isTyping: boolean }) => {
-        if (!Number.isInteger(data?.conversationId)) return;
+      validated(socket, "typing", async (data) => {
         // Silent drop, never an error: typing is cosmetic, and telling someone
         // their keystroke was rate-limited is worse than dropping it.
         if (
@@ -387,14 +410,14 @@ export function initSocket(server: HttpServer) {
         const payload = {
           userId,
           conversationId: data.conversationId,
-          isTyping: Boolean(data.isTyping),
+          isTyping: data.isTyping,
         };
 
         for (const member of members) {
           if (member.userId === userId || blocked.has(member.userId)) continue;
           io?.to(`user_${member.userId}`).emit("userTyping", payload);
         }
-      }
+      })
     );
 
     // Disconnect

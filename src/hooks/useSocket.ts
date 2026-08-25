@@ -30,6 +30,8 @@ interface ServerToClientEvents {
   /** S-13. The server refused a frame; the member should be told, not left
    *  wondering why their message vanished. */
   rateLimited: (data: { event: string; retryAfterMs: number }) => void;
+  /** S-14. The server refused a frame's shape. Always a client bug. */
+  invalidPayload: (data: { event: string; message: string }) => void;
   /** F-3. The full reaction summary for one message, after a toggle. */
   reactionUpdated: (data: {
     messageId: number;

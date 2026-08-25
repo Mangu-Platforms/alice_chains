@@ -369,6 +369,12 @@ export default function Chat() {
       );
     });
     void cleanupRateLimited;
+    // S-14. Only ever a client bug, so it is logged rather than shown — but it
+    // is logged, because silence here is how a shape mismatch survives a
+    // release.
+    socket.socket?.on("invalidPayload", (data: { event: string; message: string }) => {
+      console.error(`Server rejected "${data.event}": ${data.message}`);
+    });
     const cleanupReaction = socket.onReactionUpdated((data) => {
       if (data.conversationId === activeConversationId) refetchMessages();
     });
@@ -377,6 +383,7 @@ export default function Chat() {
       cleanupDeleted();
       cleanupReaction();
       socket.socket?.off("rateLimited");
+      socket.socket?.off("invalidPayload");
     };
   }, [activeConversationId, socket, refetchMessages, refetchConversations]);
 
