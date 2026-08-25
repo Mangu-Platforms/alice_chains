@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/mysql-core";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
@@ -42,6 +43,13 @@ async function assertOwnMessage(
 
   return { conversationId: message.conversationId };
 }
+
+/**
+ * Aliases for the reply self-join: `messages` and `users` each appear twice in
+ * the history query — once for the message, once for the message it quotes.
+ */
+const parentMessage = alias(messages, "parentMessage");
+const parentSender = alias(users, "parentSender");
 
 export interface ReactionSummary {
   emoji: string;
@@ -131,9 +139,19 @@ export const messageRouter = createRouter({
           createdAt: messages.createdAt,
           senderName: users.name,
           senderAvatar: users.avatar,
+          // F-5. The quoted snippet comes back on the same row via a self-join
+          // rather than a lookup per reply, so a page of 100 replies is still
+          // one query. `replyToDeletedAt` lets the client render "Message
+          // deleted" in the quote instead of an empty bubble.
+          replyToContent: parentMessage.content,
+          replyToSenderId: parentMessage.senderId,
+          replyToSenderName: parentSender.name,
+          replyToDeletedAt: parentMessage.deletedAt,
         })
         .from(messages)
         .leftJoin(users, eq(messages.senderId, users.id))
+        .leftJoin(parentMessage, eq(messages.replyToId, parentMessage.id))
+        .leftJoin(parentSender, eq(parentMessage.senderId, parentSender.id))
         .where(eq(messages.conversationId, input.conversationId))
         // FR-MSG-11. `createdAt` alone is not a deterministic order: MySQL
         // TIMESTAMP here has one-second resolution, so messages sent within the

@@ -8,7 +8,8 @@
  * recency. Touching it belongs with the insert, in the same transaction, on
  * whichever path the message arrived through.
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { conversations, messages } from "@db/schema";
 import { getDb } from "./connection";
 
@@ -30,7 +31,48 @@ export interface NewMessage {
  * neither write happening: the sidebar would be silently, permanently wrong for
  * that conversation.
  */
+export class InvalidReplyError extends Error {
+  constructor() {
+    super("You can only reply to a message in this conversation");
+  }
+}
+
+/**
+ * FR-MSG-15. A reply must point at a message in the same conversation.
+ *
+ * Neither door validated this, and `messages.replyToId` had no foreign key
+ * until S-3 — so a reply could reference a message the reader has no right to
+ * see, and the quoted snippet F-5 renders would have leaked its content into a
+ * conversation the author was never a member of.
+ */
+export async function assertReplyTargetIsInConversation(
+  replyToId: number,
+  conversationId: number,
+  db = getDb()
+): Promise<void> {
+  const [parent] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(and(eq(messages.id, replyToId), eq(messages.conversationId, conversationId)))
+    .limit(1);
+
+  if (!parent) throw new InvalidReplyError();
+}
+
 export async function insertMessage(input: NewMessage) {
+  if (input.replyToId != null) {
+    // Checked before the transaction opens: this is a read, and holding a
+    // write transaction across it buys nothing.
+    try {
+      await assertReplyTargetIsInConversation(input.replyToId, input.conversationId);
+    } catch (error) {
+      if (error instanceof InvalidReplyError) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+      }
+      throw error;
+    }
+  }
+
   return getDb().transaction(async (tx) => {
     const [result] = await tx.insert(messages).values({
       conversationId: input.conversationId,

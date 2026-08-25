@@ -17,7 +17,7 @@ interface ServerToClientEvents {
   userOnline: (data: { userId: number }) => void;
   userOffline: (data: { userId: number }) => void;
   onlineUsers: (userIds: number[]) => void;
-  messageError: (data: { error: string }) => void;
+  messageError: (data: { error: string; tempId?: string }) => void;
   /** F-2. Emitted by the server after a tRPC edit. */
   messageUpdated: (data: {
     id: number;

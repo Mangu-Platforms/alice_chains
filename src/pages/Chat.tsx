@@ -22,6 +22,7 @@ import {
   Pencil,
   Trash2,
   SmilePlus,
+  Reply,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +58,12 @@ export default function Chat() {
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  // F-5. The message the composer is currently replying to, if any.
+  const [replyingTo, setReplyingTo] = useState<{
+    id: number;
+    content: string;
+    senderName: string | null;
+  } | null>(null);
   const [onlineUsers, setOnlineUsers] = useState<Set<number>>(new Set());
 
   // tRPC queries
@@ -268,10 +275,12 @@ export default function Chat() {
       conversationId: activeConversationId,
       content: messageInput.trim(),
       type: "text",
+      replyToId: replyingTo?.id,
     });
 
     setMessageInput("");
-  }, [messageInput, activeConversationId, socket]);
+    setReplyingTo(null);
+  }, [messageInput, activeConversationId, socket, replyingTo]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -295,6 +304,10 @@ export default function Chat() {
 
   const selectConversation = (id: number) => {
     setSearchParams({ c: id.toString() });
+    // A reply target belongs to the conversation it came from; carrying it
+    // across would be rejected by the server (FR-MSG-15) and confusing here.
+    setReplyingTo(null);
+    setEditingMessageId(null);
     if (isMobile) setSidebarOpen(false);
   };
 
@@ -594,6 +607,20 @@ export default function Chat() {
                               {msg.senderName}
                             </p>
                           )}
+                          {msg.replyToId && !msg.deletedAt && (
+                            <div className="mb-1.5 pl-2 border-l-2 border-current/30 opacity-70">
+                              <p className="text-[11px] font-medium">
+                                {msg.replyToSenderId === user?.id
+                                  ? "You"
+                                  : msg.replyToSenderName || "Unknown"}
+                              </p>
+                              <p className="text-[11px] truncate max-w-[240px]">
+                                {msg.replyToDeletedAt
+                                  ? "Message deleted"
+                                  : msg.replyToContent}
+                              </p>
+                            </div>
+                          )}
                           {msg.deletedAt ? (
                             <p className="italic opacity-60">Message deleted</p>
                           ) : editingMessageId === msg.id ? (
@@ -658,6 +685,23 @@ export default function Chat() {
                                   <Check className="w-3 h-3" />
                                 )}
                               </span>
+                            )}
+                            {!msg.deletedAt && editingMessageId !== msg.id && (
+                              <button
+                                onClick={() =>
+                                  setReplyingTo({
+                                    id: msg.id,
+                                    content: msg.content,
+                                    senderName: msg.isMine
+                                      ? "You"
+                                      : msg.senderName,
+                                  })
+                                }
+                                className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
+                                aria-label="Reply to this message"
+                              >
+                                <Reply className="w-3 h-3" />
+                              </button>
                             )}
                             {!msg.deletedAt && editingMessageId !== msg.id && (
                               <DropdownMenu>
@@ -785,6 +829,25 @@ export default function Chat() {
 
             {/* Message Input */}
             <div className="p-4 border-t border-border">
+              {replyingTo && (
+                <div className="max-w-4xl mx-auto mb-2 flex items-start gap-2 rounded-lg bg-secondary/50 border-l-2 border-primary px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-medium text-primary">
+                      Replying to {replyingTo.senderName || "Unknown"}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {replyingTo.content}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setReplyingTo(null)}
+                    aria-label="Cancel reply"
+                    className="flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               <div className="flex items-end gap-2 max-w-4xl mx-auto">
                 <Button variant="ghost" size="icon" className="flex-shrink-0">
                   <Paperclip className="w-5 h-5 text-muted-foreground" />
@@ -793,8 +856,25 @@ export default function Chat() {
                   <textarea
                     value={messageInput}
                     onChange={(e) => handleTyping(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type a message..."
+                    onKeyDown={(e) => {
+                      // Escape drops the reply target before it reaches the
+                      // send handler, so the key does something useful whether
+                      // or not a reply is in progress.
+                      if (e.key === "Escape" && replyingTo) {
+                        e.preventDefault();
+                        setReplyingTo(null);
+                        return;
+                      }
+                      handleKeyDown(e);
+                    }}
+                    aria-label={
+                      replyingTo
+                        ? `Reply to ${replyingTo.senderName || "message"}`
+                        : "Type a message"
+                    }
+                    placeholder={
+                      replyingTo ? "Type your reply..." : "Type a message..."
+                    }
                     rows={1}
                     className="w-full resize-none rounded-xl border border-border bg-secondary/50 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 min-h-[44px] max-h-[120px]"
                     style={{ scrollbarWidth: "none" }}

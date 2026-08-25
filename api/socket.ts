@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
+import { TRPCError } from "@trpc/server";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
 import { messageReads, conversationParticipants } from "@db/schema";
@@ -161,14 +162,29 @@ export function initSocket(server: HttpServer) {
 
           // Same helper as the tRPC path: insert and bump the conversation's
           // updatedAt in one transaction (S-11).
-          const message = await insertMessage({
-            conversationId: data.conversationId,
-            senderId: userId,
-            content: data.content,
-            type: (data.type as "text" | "image" | "file") || "text",
-            fileUrl: data.fileUrl,
-            replyToId: data.replyToId,
-          });
+          // FR-MSG-15 is enforced inside `insertMessage`, so both doors get
+          // it. The socket has no error channel, so an invalid reply target is
+          // reported back to the sender rather than thrown into the void.
+          let message;
+          try {
+            message = await insertMessage({
+              conversationId: data.conversationId,
+              senderId: userId,
+              content: data.content,
+              type: (data.type as "text" | "image" | "file") || "text",
+              fileUrl: data.fileUrl,
+              replyToId: data.replyToId,
+            });
+          } catch (error) {
+            socket.emit("messageError", {
+              error:
+                error instanceof TRPCError
+                  ? error.message
+                  : "Failed to send message",
+              tempId: data.tempId,
+            });
+            return;
+          }
 
           if (message) {
             // Broadcast to all participants in the conversation
