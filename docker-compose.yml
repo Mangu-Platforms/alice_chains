@@ -35,16 +35,14 @@ services:
     build:
       context: .
       target: runtime
-      args:
-        VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL:?set VITE_KIMI_AUTH_URL in .env}
-        VITE_APP_ID: ${VITE_APP_ID:?set VITE_APP_ID in .env}
     restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: mysql://${MYSQL_USER:-alice}:${MYSQL_PASSWORD:-alice_pw}@db:3306/${MYSQL_DATABASE:-alice_chains}
-      VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL}
-      VITE_APP_ID: ${VITE_APP_ID}
+      VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL:?set VITE_KIMI_AUTH_URL in .env}
+      VITE_APP_ID: ${VITE_APP_ID:?set VITE_APP_ID in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       OWNER_UNION_ID: ${OWNER_UNION_ID:-}

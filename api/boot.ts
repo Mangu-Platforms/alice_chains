@@ -7,18 +7,20 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
-import { createOAuthCallbackHandler } from "./kimi/auth";
-import { Paths } from "@contracts/constants";
+import { clearSessionCookie } from "./lib/cookies";
+import { createOAuthCallbackHandler, createOAuthLoginHandler } from "./kimi/auth";
+import { OAUTH_CALLBACK_PATH, OAUTH_LOGIN_PATH } from "@contracts/oauth";
 import { initSocket } from "./socket";
 import { API_PORT, DEFAULT_PROD_PORT } from "@contracts/constants";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
-app.get(Paths.oauthCallback, createOAuthCallbackHandler());
-app.get("/api/logout", () => new Response(null, {
+app.get(OAUTH_LOGIN_PATH, createOAuthLoginHandler());
+app.get(OAUTH_CALLBACK_PATH, createOAuthCallbackHandler());
+app.get("/api/logout", (c) => new Response(null, {
   status: 302,
-  headers: { Location: "/login", "Set-Cookie": "alice_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" },
+  headers: { Location: "/login", "Set-Cookie": clearSessionCookie(c.req.raw.headers) },
 }));
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({

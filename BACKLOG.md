@@ -26,7 +26,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-8** | Authorize `message.markAsRead` on both the tRPC and socket paths; extract one `assertParticipant` helper — **CRITICAL** | P0 | — | ✅ Done |
 | **S-9** | Validate participant ids on conversation creation, enforce blocking, cap group size, fix the `createDirect` idempotency bug | P0 | — (must ship before or with S-3) | ✅ Done |
 | **S-10** | Close the directory-enumeration leak (`contact.searchUsers`) and the presence broadcast leak | P0 | — | ✅ Done |
-| **S-4** | OAuth coherence: origin-only `VITE_KIMI_AUTH_URL`, `PUBLIC_BASE_URL` for both `redirect_uri` legs, `state`, PKCE S256 | P0 | — | Not started |
+| **S-4** | OAuth coherence: origin-only `VITE_KIMI_AUTH_URL`, `PUBLIC_BASE_URL` for both `redirect_uri` legs, `state`, PKCE S256 | P0 | — | ✅ Done |
 | **S-5** | Fix read receipts (`inArray` instead of interpolated `IN (?)`) and message-router query hygiene | P0 | — | Not started |
 | **S-17** | Session lifecycle hardening — `Secure` + `__Host-` cookie from one helper, session-id rotation on login, server-side revocation on logout, 24 h idle expiry, payload version, ≥ 32-byte secrets (`api/lib/env.ts` accepts 1 character today) | P0 | S-4 (ship after or with it) | Not started |
 
@@ -79,6 +79,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **H-3** | Give `.prettierignore` real contents; drop the stale `copilot/*` branches | Not started |
 | **H-4** | Remove the orphan `tsconfig.app.json` / `tsconfig.server.json` | Not started |
 | **H-5** | Reconcile the "JWT" wording in `README.md` and `info.md` — sessions are HMAC-signed cookies | Not started |
+| **H-7** | `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` are read on the server only — since S-4 the client builds no provider URL — so the `VITE_` prefix is now misleading. Rename to `KIMI_AUTH_URL`/`KIMI_APP_ID` keeping backwards compatibility, alongside the `JWT_SECRET` → `SESSION_SECRET` rename ([ADR-002](docs/ADR.md)) | Not started |
 | **H-6** | `.env.example` ships `NODE_ENV=development`, so a `cp .env.example .env` followed by `npm run build` emits a **development** React bundle — 839 KB instead of 597 KB, with dev warnings shipped to users. Found while verifying S-8. Make `npm run build` force `NODE_ENV=production` | Not started |
 
 ---

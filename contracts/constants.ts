@@ -1,6 +1,5 @@
-export const Paths = {
-  oauthCallback: "/api/oauth/callback",
-} as const;
+// The OAuth paths that used to live here now belong to the endpoint contract
+// in contracts/oauth.ts, which derives every provider URL from one origin.
 
 export const Session = {
   cookieName: "alice_session",

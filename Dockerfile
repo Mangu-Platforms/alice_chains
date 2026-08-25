@@ -11,11 +11,10 @@ FROM node:22-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Vite inlines VITE_* vars at build time, so they must be present here.
-ARG VITE_KIMI_AUTH_URL
-ARG VITE_APP_ID
-ENV VITE_KIMI_AUTH_URL=$VITE_KIMI_AUTH_URL
-ENV VITE_APP_ID=$VITE_APP_ID
+# No VITE_* build args. Since S-4 the client constructs no provider URL — it
+# links to /api/oauth/login and the server owns the whole authorize URL — so
+# nothing about the OAuth provider is baked into the bundle and one image runs
+# against any environment.
 RUN npm run build
 
 # ─── Stage 3: slim runtime ────────────────────────────────────────────────────
