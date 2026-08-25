@@ -124,6 +124,31 @@ curl http://localhost:3001/api/trpc/ping     # -> {"result":{"data":{"json":{"ok
 
 ---
 
+## 5a. Demo data, without an OAuth provider
+
+```bash
+npm run db:seed
+```
+
+Creates three members, a direct conversation between two of them, a group
+containing all three, an accepted contact pair and a pending contact request —
+then prints a signed session cookie for each member. Paste one into the
+browser console on http://localhost:3000 and you are signed in as that person,
+with no identity provider involved.
+
+Those are ordinary sessions: a row in `sessions` plus a signed cookie, which is
+exactly what the OAuth callback produces. They expire on the normal schedule and
+can be revoked like any other. The script simply holds the signing key, because
+it runs on the machine that owns it.
+
+It refuses to run when `NODE_ENV=production`, and refuses when `DATABASE_URL`
+points anywhere but a local host — `localhost`, `127.0.0.1`, `::1`, or the `db`
+service name inside compose. There is no override flag, deliberately: a flag is
+something a line in a shell history can pass. Re-running is safe; every insert
+is keyed on a stable demo union id and skipped when the row already exists.
+
+---
+
 ## 6. Run the whole stack in containers
 
 ```bash

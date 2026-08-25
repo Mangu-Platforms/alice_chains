@@ -67,6 +67,7 @@ docker compose up             # app on http://localhost:3000
 | `npm run db:migrate` | apply pending migrations (canonical) |
 | `npm run db:push` | sync schema without a migration — **scratch development only** |
 | `npm run db:studio` | Drizzle Studio |
+| `npm run db:seed` | demo members, a direct conversation and a group, plus a working session cookie for each — **local databases only** |
 | `npm run check:a11y` | assert every icon-only control has an accessible name |
 | `npm run check:bundle` | assert the initial JS payload against the NFR-PERF-06 budget |
 | `npm run generate-vapid` | generate a VAPID key pair for web push |
