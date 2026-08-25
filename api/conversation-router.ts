@@ -1,17 +1,29 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { assertNotBlocked, assertUsersExist, isParticipant } from "./lib/authz";
-import { MAX_CONVERSATION_PARTICIPANTS } from "@contracts/constants";
 import {
-  conversations,
-  conversationParticipants,
-  messages,
-  users,
-} from "@db/schema";
+  CONVERSATION_LIST_LIMIT,
+  MAX_CONVERSATION_PARTICIPANTS,
+} from "@contracts/constants";
+
+/** Row shape of the conversation-list statement in `list`. */
+interface ConversationListRow {
+  id: number;
+  name: string | null;
+  type: "direct" | "group";
+  avatar: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  lastMessageContent: string | null;
+  lastMessageAt: Date | null;
+  lastMessageSenderId: number | null;
+  unreadCount: number | string | null;
+}
+import { conversations, conversationParticipants, users } from "@db/schema";
 
 /**
  * `conversation_participants` is joined twice in `createDirect` — once for the
@@ -24,30 +36,55 @@ export const conversationRouter = createRouter({
     const db = getDb();
     const userId = ctx.user.id;
 
-    // Get all conversation IDs where user is a participant
-    const participantRows = await db
-      .select({ conversationId: conversationParticipants.conversationId })
-      .from(conversationParticipants)
-      .where(eq(conversationParticipants.userId, userId));
+    // S-11. This was four round trips reduced in JavaScript, and the fourth
+    // selected EVERY message of EVERY conversation the caller belongs to — no
+    // LIMIT — purely to pick the newest one per conversation in Node. At ten
+    // conversations of five thousand messages that is fifty thousand rows per
+    // sidebar render, and the client refetches on every inbound message.
+    //
+    // One statement now, per DATA_MODEL.md 6.1: a window function picks the
+    // last message per conversation and a correlated subquery counts the
+    // unread. Both are index range scans on IX-1
+    // (messages(conversationId, createdAt)); the membership CTE uses IX-2.
+    //
+    // COALESCE against '1970-01-02' rather than '1970-01-01': MySQL TIMESTAMP
+    // cannot represent the epoch itself, so the obvious zero value is a
+    // runtime error.
+    const rows = await db.execute(sql`
+      WITH my AS (
+        SELECT conversationId, lastReadAt
+        FROM conversation_participants
+        WHERE userId = ${userId}
+      ),
+      last_msg AS (
+        SELECT m.id, m.conversationId, m.content, m.createdAt, m.senderId,
+               ROW_NUMBER() OVER (PARTITION BY m.conversationId ORDER BY m.id DESC) rn
+        FROM messages m
+        JOIN my ON my.conversationId = m.conversationId
+      )
+      SELECT c.id, c.name, c.type, c.avatar, c.createdAt, c.updatedAt,
+             lm.content        AS lastMessageContent,
+             lm.createdAt      AS lastMessageAt,
+             lm.senderId       AS lastMessageSenderId,
+             (SELECT COUNT(*) FROM messages um
+                WHERE um.conversationId = c.id
+                  AND um.senderId <> ${userId}
+                  AND um.createdAt > COALESCE(my.lastReadAt, '1970-01-02')) AS unreadCount
+      FROM conversations c
+      JOIN my ON my.conversationId = c.id
+      LEFT JOIN last_msg lm ON lm.conversationId = c.id AND lm.rn = 1
+      ORDER BY COALESCE(lm.createdAt, c.createdAt) DESC
+      LIMIT ${CONVERSATION_LIST_LIMIT}
+    `);
 
-    const conversationIds = participantRows.map((r) => r.conversationId);
-    if (conversationIds.length === 0) return [];
+    const convs = (rows as unknown as [ConversationListRow[]])[0];
+    if (convs.length === 0) return [];
 
-    // Get conversations with latest message
-    const convs = await db
-      .select({
-        id: conversations.id,
-        name: conversations.name,
-        type: conversations.type,
-        avatar: conversations.avatar,
-        createdAt: conversations.createdAt,
-        updatedAt: conversations.updatedAt,
-      })
-      .from(conversations)
-      .where(inArray(conversations.id, conversationIds))
-      .orderBy(desc(conversations.updatedAt));
+    const conversationIds = convs.map((c) => Number(c.id));
 
-    // Get participants for each conversation
+    // Participants are hydrated separately rather than GROUP_CONCAT-ed, so the
+    // shape stays typed and a large group does not truncate at the
+    // group_concat_max_len cliff.
     const participants = await db
       .select({
         conversationId: conversationParticipants.conversationId,
@@ -59,26 +96,6 @@ export const conversationRouter = createRouter({
       .leftJoin(users, eq(conversationParticipants.userId, users.id))
       .where(inArray(conversationParticipants.conversationId, conversationIds));
 
-    // Get latest message for each conversation
-    const latestMessages = await db
-      .select({
-        conversationId: messages.conversationId,
-        content: messages.content,
-        createdAt: messages.createdAt,
-        senderId: messages.senderId,
-      })
-      .from(messages)
-      .where(inArray(messages.conversationId, conversationIds))
-      .orderBy(desc(messages.createdAt));
-
-    // Build result
-    const latestByConv = new Map<number, (typeof latestMessages)[number]>();
-    for (const m of latestMessages) {
-      if (!latestByConv.has(m.conversationId)) {
-        latestByConv.set(m.conversationId, m);
-      }
-    }
-
     const partsByConv = new Map<number, typeof participants>();
     for (const p of participants) {
       const arr = partsByConv.get(p.conversationId) || [];
@@ -87,26 +104,29 @@ export const conversationRouter = createRouter({
     }
 
     return convs.map((conv) => {
-      const parts = partsByConv.get(conv.id) || [];
+      const id = Number(conv.id);
+      const parts = partsByConv.get(id) || [];
       const otherParticipant = parts.find((p) => p.userId !== userId);
-      const latest = latestByConv.get(conv.id);
 
       return {
-        ...conv,
+        id,
+        name: conv.name,
+        type: conv.type,
+        avatar: conv.avatar,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
         displayName:
           conv.type === "direct"
             ? otherParticipant?.userName || "Unknown"
             : conv.name || "Group Chat",
-        displayAvatar:
-          conv.type === "direct"
-            ? otherParticipant?.userAvatar
-            : conv.avatar,
+        displayAvatar: conv.type === "direct" ? otherParticipant?.userAvatar : conv.avatar,
         participants: parts,
-        latestMessage: latest
+        unreadCount: Number(conv.unreadCount ?? 0),
+        latestMessage: conv.lastMessageAt
           ? {
-              content: latest.content,
-              createdAt: latest.createdAt,
-              senderId: latest.senderId,
+              content: conv.lastMessageContent as string,
+              createdAt: conv.lastMessageAt,
+              senderId: Number(conv.lastMessageSenderId),
             }
           : null,
       };

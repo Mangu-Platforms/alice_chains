@@ -30,12 +30,12 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-5** | Fix read receipts (`inArray` instead of interpolated `IN (?)`) and message-router query hygiene | P0 | — | ✅ Done |
 | **S-17** | Session lifecycle hardening — `Secure` + `__Host-` cookie from one helper, session-id rotation on login, server-side revocation on logout, 24 h idle expiry, payload version, ≥ 32-byte secrets | P0 | S-4 | ✅ Done |
 
-## Wave 2 — Data integrity
+## Wave 2 — Data integrity ✅
 
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
 | **S-3** | Foreign keys, unique constraints and indexes per [DATA_MODEL.md §3–§4](docs/DATA_MODEL.md); replace exception-driven duplicate handling | P0 | S-9 | ✅ Done |
-| **S-11** | Make `conversations.updatedAt` real on every message write; compute `unreadCount` in `conversation.list` | P0 | S-3 | Not started |
+| **S-11** | Make `conversations.updatedAt` real on every message write; compute `unreadCount` in `conversation.list` | P0 | S-3 | ✅ Done |
 
 ## Wave 3 — Trustworthy tests
 

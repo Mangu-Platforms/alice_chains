@@ -1,7 +1,8 @@
 import type { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getDb } from "./queries/connection";
-import { messages, messageReads, conversationParticipants } from "@db/schema";
+import { insertMessage } from "./queries/messages";
+import { messageReads, conversationParticipants } from "@db/schema";
 import { eq, sql } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
 import { getSessionToken, verifySessionToken } from "./kimi/session";
@@ -158,8 +159,9 @@ export function initSocket(server: HttpServer) {
 
           const db = getDb();
 
-          // Insert message
-          const [result] = await db.insert(messages).values({
+          // Same helper as the tRPC path: insert and bump the conversation's
+          // updatedAt in one transaction (S-11).
+          const message = await insertMessage({
             conversationId: data.conversationId,
             senderId: userId,
             content: data.content,
@@ -167,15 +169,6 @@ export function initSocket(server: HttpServer) {
             fileUrl: data.fileUrl,
             replyToId: data.replyToId,
           });
-
-          const messageId = Number(result.insertId);
-
-          // Fetch the complete message with sender info
-          const [message] = await db
-            .select()
-            .from(messages)
-            .where(eq(messages.id, messageId))
-            .limit(1);
 
           if (message) {
             // Broadcast to all participants in the conversation

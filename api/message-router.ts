@@ -2,6 +2,7 @@ import { z } from "zod";
 import { eq, desc, inArray, sql } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { insertMessage } from "./queries/messages";
 import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
 import { messages, messageReads, users } from "@db/schema";
 import { MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
@@ -92,7 +93,9 @@ export const messageRouter = createRouter({
 
       await assertParticipant(userId, input.conversationId, db);
 
-      const [result] = await db.insert(messages).values({
+      // Shared with the socket path so `conversations.updatedAt` is touched
+      // whichever door the message came through (S-11).
+      const stored = await insertMessage({
         conversationId: input.conversationId,
         senderId: userId,
         content: input.content,
@@ -101,15 +104,7 @@ export const messageRouter = createRouter({
         replyToId: input.replyToId,
       });
 
-      return {
-        id: Number(result.insertId),
-        conversationId: input.conversationId,
-        senderId: userId,
-        content: input.content,
-        type: input.type,
-        createdAt: new Date(),
-        isMine: true,
-      };
+      return { ...stored, isMine: true };
     }),
 
   markAsRead: authedQuery

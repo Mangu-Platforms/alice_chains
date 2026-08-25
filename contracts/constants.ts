@@ -70,3 +70,6 @@ export const USER_SEARCH_LIMIT = 20;
  * single character until S-17, which made every session forgeable.
  */
 export const MIN_SECRET_LENGTH = 32;
+
+/** Most conversations one `conversation.list` call returns. */
+export const CONVERSATION_LIST_LIMIT = 50;
