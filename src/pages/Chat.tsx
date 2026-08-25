@@ -29,6 +29,7 @@ import {
   Bell,
   BellOff,
   Settings,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +52,8 @@ import { toast } from "sonner";
 import { t, formatTime, formatMessageTimestamp } from "@/i18n";
 import { LiveRegion } from "@/components/LiveRegion";
 import { Linkify } from "@/lib/linkify";
+import { ConnectionBanner } from "@/components/ConnectionBanner";
+import { Outbox, type OutboxEntry } from "@/lib/outbox";
 import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
 import {
@@ -93,6 +96,12 @@ export default function Chat() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [messageQuery, setMessageQuery] = useState("");
   const [searchEverywhere, setSearchEverywhere] = useState(false);
+
+  // P-UX-2. One outbox per mounted Chat. A ref rather than state because the
+  // queue is the source of truth and `pending` is just a render of it.
+  const outboxRef = useRef(new Outbox());
+  const [pending, setPending] = useState<OutboxEntry[]>([]);
+  useEffect(() => outboxRef.current.subscribe(setPending), []);
   const [replyingTo, setReplyingTo] = useState<{
     id: number;
     content: string;
@@ -355,6 +364,10 @@ export default function Chat() {
   // Listen for new messages
   useEffect(() => {
     const cleanup = socket.onNewMessage((message) => {
+      // P-UX-2. The echo is the acknowledgement: a replay the server had
+      // already applied is removed rather than sent again.
+      if (message.tempId) outboxRef.current.acknowledge(message.tempId);
+
       if (message.conversationId === activeConversationId) {
         refetchMessages();
         if (message.senderId !== user?.id) {
@@ -400,6 +413,15 @@ export default function Chat() {
       );
     });
     void cleanupRateLimited;
+    // A refusal is final for that message: it must leave the queue, or the
+    // next reconnect replays something the server has already said no to.
+    socket.socket?.on(
+      "messageError",
+      (data: { error: string; tempId?: string }) => {
+        if (data.tempId) outboxRef.current.fail(data.tempId);
+        toast.error(data.error);
+      }
+    );
     // S-14. Only ever a client bug, so it is logged rather than shown — but it
     // is logged, because silence here is how a shape mismatch survives a
     // release.
@@ -415,6 +437,7 @@ export default function Chat() {
       cleanupReaction();
       socket.socket?.off("rateLimited");
       socket.socket?.off("invalidPayload");
+      socket.socket?.off("messageError");
     };
   }, [activeConversationId, socket, refetchMessages, refetchConversations]);
 
@@ -480,18 +503,53 @@ export default function Chat() {
   }, []);
 
   const handleSendMessage = useCallback(() => {
-    if (!messageInput.trim() || !activeConversationId) return;
+    const content = messageInput.trim();
+    if (!content || !activeConversationId) return;
 
-    socket.sendMessage({
+    // P-UX-2. Everything goes through the outbox, connected or not — so the
+    // send path is one path, and "sent" always means "the server echoed the
+    // tempId back". Previously an emit into a dead socket looked identical to
+    // a successful one and the message was simply lost.
+    const entry = outboxRef.current.enqueue({
       conversationId: activeConversationId,
-      content: messageInput.trim(),
-      type: "text",
+      content,
       replyToId: replyingTo?.id,
     });
+
+    if (socket.isConnected) {
+      socket.sendMessage({
+        conversationId: activeConversationId,
+        content,
+        type: "text",
+        replyToId: replyingTo?.id,
+        tempId: entry.tempId,
+      });
+    }
 
     setMessageInput("");
     setReplyingTo(null);
   }, [messageInput, activeConversationId, socket, replyingTo]);
+
+  // Replay on reconnect, oldest first, and tell the member about anything the
+  // queue gave up on rather than dropping it in silence.
+  useEffect(() => {
+    if (!socket.isConnected) return;
+
+    const dropped = outboxRef.current.drain();
+    for (const entry of dropped) {
+      toast.error(`Could not send "${entry.content.slice(0, 40)}". Please try again.`);
+    }
+
+    for (const entry of outboxRef.current.takeForReplay()) {
+      socket.sendMessage({
+        conversationId: entry.conversationId,
+        content: entry.content,
+        type: "text",
+        replyToId: entry.replyToId,
+        tempId: entry.tempId,
+      });
+    }
+  }, [socket.isConnected, socket]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -918,6 +976,11 @@ export default function Chat() {
             </header>
 
             {/* Messages Area */}
+            <ConnectionBanner
+              state={socket.connection}
+              queued={outboxRef.current.size()}
+            />
+
             {searchOpen && (
               <div className="border-b border-border bg-card/30 px-4 py-3 space-y-3">
                 <div className="flex items-center gap-2">
@@ -1326,6 +1389,31 @@ export default function Chat() {
                     </div>
                   );
                 })}
+
+                {/*
+                  Queued sends, shown in place rather than hidden: a member who
+                  typed something offline should see it sitting there rather
+                  than wonder whether it went.
+                */}
+                {pending
+                  .filter((entry) => entry.conversationId === activeConversationId)
+                  .map((entry) => (
+                    <div key={entry.tempId} className="flex justify-end mb-1">
+                      <div className="flex items-end gap-2 max-w-[75%] flex-row-reverse">
+                        <div className="px-4 py-2 text-sm leading-relaxed message-bubble-mine opacity-60">
+                          <p className="whitespace-pre-wrap break-words">
+                            {entry.content}
+                          </p>
+                          <div className="flex items-center gap-1 mt-1 justify-end">
+                            <Clock className="w-3 h-3" aria-hidden="true" />
+                            <span className="text-[10px]">
+                              {socket.isConnected ? "Sending…" : "Waiting to send"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
 
                 {typingUsers.size > 0 && (
                   <div className="flex items-center gap-2 py-2">

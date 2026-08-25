@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import type { Message } from "@db/schema";
 
@@ -62,8 +62,13 @@ interface ClientToServerEvents {
   typing: (data: { conversationId: number; isTyping: boolean }) => void;
 }
 
+export type ConnectionState = "connecting" | "connected" | "disconnected";
+
 export function useSocket() {
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
+  // P-UX-2. The socket's state was invisible to the app, so a send into a dead
+  // connection looked identical to a successful one.
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
 
   useEffect(() => {
     const socket = io({
@@ -74,6 +79,13 @@ export function useSocket() {
 
     socketRef.current = socket;
 
+    socket.on("connect", () => setConnection("connected"));
+    socket.on("disconnect", () => setConnection("disconnected"));
+    // Socket.IO retries on its own; this is what distinguishes "trying" from
+    // "given up" for the banner.
+    socket.io.on("reconnect_attempt", () => setConnection("connecting"));
+    socket.io.on("reconnect_failed", () => setConnection("disconnected"));
+
     // A revoked session cannot be recovered by reconnecting, so stop trying and
     // send the browser to the login page.
     socket.on("sessionExpired", () => {
@@ -83,6 +95,10 @@ export function useSocket() {
 
     return () => {
       socket.off("sessionExpired");
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.io.off("reconnect_attempt");
+      socket.io.off("reconnect_failed");
       socket.disconnect();
     };
   }, []);
@@ -247,6 +263,8 @@ export function useSocket() {
 
   return {
     socket: socketRef.current,
+    connection,
+    isConnected: connection === "connected",
     join,
     joinConversation,
     leaveConversation,
