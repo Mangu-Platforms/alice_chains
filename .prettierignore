@@ -30,3 +30,13 @@ npm-debug.log*
 .cache
 temp
 tmp
+
+# Generated SQL migrations — the formatter would reflow statements that must
+# stay byte-identical to what drizzle-kit emitted and what has already run.
+db/migrations
+
+# Static assets served as-is
+public
+
+# Coverage output
+coverage
