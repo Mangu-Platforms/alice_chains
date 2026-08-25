@@ -34,6 +34,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { MAX_MESSAGE_LENGTH } from "@contracts/constants";
@@ -114,8 +120,17 @@ export default function Chat() {
 
   // F-3. The server decides add-vs-remove from what is stored, so the client
   // sends only the emoji and re-renders from the summary that comes back.
+  // F-7. Group administration lives behind the header menu; every mutation
+  // refetches the conversation and the sidebar, and the server also fans out
+  // `conversationUpdated` so other members converge without acting.
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState("");
+
   const { data: blockedContacts, refetch: refetchBlocked } =
     trpc.contact.blocked.useQuery();
+  // Only accepted contacts can be added to a group, so the picker below shows
+  // exactly the people the caller could legitimately invite.
+  const { data: contacts } = trpc.contact.list.useQuery();
 
   const blockUser = trpc.contact.block.useMutation({
     onSuccess: () => {
@@ -133,6 +148,43 @@ export default function Chat() {
       refetchConversations();
     },
     onError: (error) => toast.error(error.message),
+  });
+
+  const utils = trpc.useUtils();
+  const afterGroupChange = (message: string) => () => {
+    toast.success(message);
+    utils.conversation.getById.invalidate();
+    refetchConversations();
+  };
+  const onGroupError = (error: { message: string }) => toast.error(error.message);
+
+  const renameGroup = trpc.conversation.rename.useMutation({
+    onSuccess: () => {
+      setGroupDialogOpen(false);
+      afterGroupChange("Group renamed")();
+    },
+    onError: onGroupError,
+  });
+  const addParticipants = trpc.conversation.addParticipants.useMutation({
+    onSuccess: afterGroupChange("Member added"),
+    onError: onGroupError,
+  });
+  const removeParticipant = trpc.conversation.removeParticipant.useMutation({
+    onSuccess: afterGroupChange("Member removed"),
+    onError: onGroupError,
+  });
+  const transferOwnership = trpc.conversation.transferOwnership.useMutation({
+    onSuccess: afterGroupChange("Ownership transferred"),
+    onError: onGroupError,
+  });
+  const leaveGroup = trpc.conversation.leave.useMutation({
+    onSuccess: () => {
+      setGroupDialogOpen(false);
+      toast.success("You left the group");
+      setSearchParams({});
+      refetchConversations();
+    },
+    onError: onGroupError,
   });
 
   const react = trpc.message.react.useMutation({
@@ -348,6 +400,12 @@ export default function Chat() {
   const isOtherMemberBlocked =
     otherMemberId !== null &&
     (blockedContacts ?? []).some((b) => b.contactUserId === otherMemberId);
+
+  const isGroup = activeConversation?.type === "group";
+  const isGroupOwner = isGroup && activeConversation?.createdBy === user?.id;
+  const contactsNotInGroup = (contacts ?? []).filter(
+    (c) => !activeConversation?.participants.some((p) => p.userId === c.contactUserId)
+  );
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
@@ -591,6 +649,18 @@ export default function Chat() {
                       they are gone until the tasks that own them ship, because
                       a control that lies is worse than one that is absent.
                     */}
+                    {isGroup && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setGroupNameDraft(activeConversation?.name ?? "");
+                          setGroupDialogOpen(true);
+                        }}
+                        className="gap-2"
+                      >
+                        <Users className="w-4 h-4" />
+                        Group settings
+                      </DropdownMenuItem>
+                    )}
                     {otherMemberId !== null &&
                       (isOtherMemberBlocked ? (
                         <DropdownMenuItem
@@ -887,6 +957,182 @@ export default function Chat() {
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
+
+            {/* F-7 · Group settings */}
+            <Dialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen}>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Group settings</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-5">
+                  <div className="space-y-2">
+                    <label htmlFor="group-name" className="text-sm font-medium">
+                      Name
+                    </label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="group-name"
+                        value={groupNameDraft}
+                        onChange={(e) => setGroupNameDraft(e.target.value)}
+                        maxLength={100}
+                        disabled={!isGroupOwner}
+                        placeholder="Group name"
+                      />
+                      <Button
+                        onClick={() =>
+                          activeConversationId &&
+                          renameGroup.mutate({
+                            conversationId: activeConversationId,
+                            name: groupNameDraft.trim(),
+                          })
+                        }
+                        disabled={
+                          !isGroupOwner ||
+                          renameGroup.isPending ||
+                          !groupNameDraft.trim() ||
+                          groupNameDraft.trim() === activeConversation?.name
+                        }
+                      >
+                        {renameGroup.isPending ? "Saving…" : "Save"}
+                      </Button>
+                    </div>
+                    {!isGroupOwner && (
+                      <p className="text-xs text-muted-foreground">
+                        Only the group owner can change these.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">
+                      Members ({activeConversation?.participants.length ?? 0})
+                    </p>
+                    <ScrollArea className="max-h-48">
+                      <ul className="space-y-1">
+                        {activeConversation?.participants.map((p) => (
+                          <li
+                            key={p.userId}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-secondary/50"
+                          >
+                            <Avatar className="w-7 h-7">
+                              <AvatarImage src={p.userAvatar || undefined} />
+                              <AvatarFallback className="text-[10px] bg-primary/20">
+                                {p.userName?.charAt(0).toUpperCase() || "?"}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="flex-1 text-sm truncate">
+                              {p.userName || "Unknown"}
+                              {p.userId === activeConversation?.createdBy && (
+                                <span className="ml-1.5 text-[10px] text-muted-foreground">
+                                  owner
+                                </span>
+                              )}
+                            </span>
+                            {isGroupOwner && p.userId !== user?.id && (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() =>
+                                    activeConversationId &&
+                                    transferOwnership.mutate({
+                                      conversationId: activeConversationId,
+                                      newOwnerId: p.userId,
+                                    })
+                                  }
+                                  disabled={transferOwnership.isPending}
+                                >
+                                  Make owner
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-destructive"
+                                  aria-label={`Remove ${p.userName || "member"}`}
+                                  onClick={() =>
+                                    activeConversationId &&
+                                    removeParticipant.mutate({
+                                      conversationId: activeConversationId,
+                                      userId: p.userId,
+                                    })
+                                  }
+                                  disabled={removeParticipant.isPending}
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </Button>
+                              </>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </ScrollArea>
+                  </div>
+
+                  {isGroupOwner && (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Add a contact</p>
+                      {contactsNotInGroup.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Everyone in your contacts is already here.
+                        </p>
+                      ) : (
+                        <ScrollArea className="max-h-40">
+                          <ul className="space-y-1">
+                            {contactsNotInGroup.map((c) => (
+                              <li
+                                key={c.contactUserId}
+                                className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-secondary/50"
+                              >
+                                <span className="flex-1 text-sm truncate">
+                                  {c.contactName || "Unknown"}
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() =>
+                                    activeConversationId &&
+                                    addParticipants.mutate({
+                                      conversationId: activeConversationId,
+                                      userIds: [c.contactUserId],
+                                    })
+                                  }
+                                  disabled={addParticipants.isPending}
+                                >
+                                  Add
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        </ScrollArea>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-border">
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-2 text-destructive"
+                      onClick={() =>
+                        activeConversationId &&
+                        leaveGroup.mutate({ conversationId: activeConversationId })
+                      }
+                      disabled={leaveGroup.isPending}
+                    >
+                      <LogOut className="w-4 h-4" />
+                      {leaveGroup.isPending ? "Leaving…" : "Leave group"}
+                    </Button>
+                    {isGroupOwner &&
+                      (activeConversation?.participants.length ?? 0) > 1 && (
+                        <p className="text-xs text-muted-foreground px-3">
+                          Transfer ownership to someone else before you can leave.
+                        </p>
+                      )}
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
 
             {/* Message Input */}
             <div className="p-4 border-t border-border">

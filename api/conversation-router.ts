@@ -4,7 +4,13 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { assertNotBlocked, assertUsersExist, isParticipant } from "./lib/authz";
+import {
+  assertNotBlocked,
+  assertParticipant,
+  assertUsersExist,
+  isParticipant,
+} from "./lib/authz";
+import { emitToMembers } from "./lib/realtime";
 import {
   CONVERSATION_LIST_LIMIT,
   MAX_CONVERSATION_PARTICIPANTS,
@@ -30,6 +36,64 @@ import { conversations, conversationParticipants, users } from "@db/schema";
  * caller, once for the other member — so the second reference needs an alias.
  */
 const otherMember = alias(conversationParticipants, "otherMember");
+
+
+/**
+ * Load a group the caller may administer.
+ *
+ * `conversations.createdBy` was written at creation and never read — there was
+ * no owner check anywhere, because there was nothing to check (F-7). These are
+ * the two gates the new procedures share.
+ */
+async function loadGroup(conversationId: number, db = getDb()) {
+  const [conversation] = await db
+    .select({
+      id: conversations.id,
+      type: conversations.type,
+      createdBy: conversations.createdBy,
+      name: conversations.name,
+    })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+
+  if (!conversation || conversation.type !== "group") {
+    // A direct conversation has no name, no avatar and a fixed membership;
+    // administering one is not a thing that exists rather than a thing that is
+    // forbidden. Both answer the same way so neither is an id-probing oracle.
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This is not a group conversation",
+    });
+  }
+
+  return conversation;
+}
+
+/** Throws unless the caller both belongs to the group and owns it. */
+async function assertGroupOwner(userId: number, conversationId: number, db = getDb()) {
+  const conversation = await loadGroup(conversationId, db);
+  await assertParticipant(userId, conversationId, db);
+
+  if (conversation.createdBy !== userId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the group owner can do that",
+    });
+  }
+
+  return conversation;
+}
+
+/** Touch `updatedAt` and tell every member, so open clients converge. */
+async function announceConversationChange(conversationId: number, db = getDb()) {
+  await db
+    .update(conversations)
+    .set({ updatedAt: new Date() })
+    .where(eq(conversations.id, conversationId));
+
+  await emitToMembers(conversationId, "conversationUpdated", { conversationId });
+}
 
 export const conversationRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -302,6 +366,211 @@ export const conversationRouter = createRouter({
       );
 
       return { id: convId, name: input.name, type: "group" as const };
+    }),
+
+  // ─── Group administration (F-7) ─────────────────────────────────────────
+
+  rename: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        name: z.string().trim().min(1).max(100),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      await db
+        .update(conversations)
+        .set({ name: input.name })
+        .where(eq(conversations.id, input.conversationId));
+
+      await announceConversationChange(input.conversationId, db);
+      return { id: input.conversationId, name: input.name };
+    }),
+
+  setAvatar: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        // Nullable so the owner can clear it. F-4 replaces this with an upload
+        // handle; until then it accepts a URL the client already has.
+        avatar: z.string().trim().max(2048).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      await db
+        .update(conversations)
+        .set({ avatar: input.avatar })
+        .where(eq(conversations.id, input.conversationId));
+
+      await announceConversationChange(input.conversationId, db);
+      return { id: input.conversationId, avatar: input.avatar };
+    }),
+
+  addParticipants: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        userIds: z
+          .array(z.number().int().positive())
+          .min(1)
+          .max(MAX_CONVERSATION_PARTICIPANTS - 1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+      await assertGroupOwner(userId, input.conversationId, db);
+
+      const existing = await db
+        .select({ userId: conversationParticipants.userId })
+        .from(conversationParticipants)
+        .where(eq(conversationParticipants.conversationId, input.conversationId));
+
+      const current = new Set(existing.map((row) => row.userId));
+      const invited = [...new Set(input.userIds)].filter((id) => !current.has(id));
+
+      if (invited.length === 0) {
+        // Everyone named is already in. Nothing to do, and nothing to tell the
+        // other members about.
+        return { added: [] as number[] };
+      }
+
+      if (current.size + invited.length > MAX_CONVERSATION_PARTICIPANTS) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `A conversation may hold at most ${MAX_CONVERSATION_PARTICIPANTS} members`,
+        });
+      }
+
+      // The same validation S-9 applies at creation — existence and blocking —
+      // rather than a second implementation of it.
+      await assertUsersExist(invited, db);
+      await assertNotBlocked(userId, invited, db);
+
+      await db
+        .insert(conversationParticipants)
+        .values(invited.map((id) => ({ conversationId: input.conversationId, userId: id })));
+
+      await announceConversationChange(input.conversationId, db);
+      return { added: invited };
+    }),
+
+  removeParticipant: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        userId: z.number().int().positive(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      if (input.userId === ctx.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Use leave, or transfer ownership first",
+        });
+      }
+
+      // Tell them while they are still a member — after the delete they are no
+      // longer in the fan-out audience.
+      await emitToMembers(input.conversationId, "conversationUpdated", {
+        conversationId: input.conversationId,
+      });
+
+      await db
+        .delete(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.userId, input.userId)
+          )
+        );
+
+      await announceConversationChange(input.conversationId, db);
+      return { removed: input.userId };
+    }),
+
+  transferOwnership: authedQuery
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        newOwnerId: z.number().int().positive(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await assertGroupOwner(ctx.user.id, input.conversationId, db);
+
+      if (input.newOwnerId === ctx.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "You already own this group",
+        });
+      }
+
+      // The new owner must already be a member: FK-10 is RESTRICT precisely so
+      // ownership is always held by someone real and present.
+      if (!(await isParticipant(input.newOwnerId, input.conversationId, db))) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "The new owner must be a member of the group",
+        });
+      }
+
+      await db
+        .update(conversations)
+        .set({ createdBy: input.newOwnerId })
+        .where(eq(conversations.id, input.conversationId));
+
+      await announceConversationChange(input.conversationId, db);
+      return { ownerId: input.newOwnerId };
+    }),
+
+  leave: authedQuery
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+
+      const conversation = await loadGroup(input.conversationId, db);
+      await assertParticipant(userId, input.conversationId, db);
+
+      const members = await db
+        .select({ userId: conversationParticipants.userId })
+        .from(conversationParticipants)
+        .where(eq(conversationParticipants.conversationId, input.conversationId));
+
+      // An owner walking out would leave the group unadministrable, so they
+      // hand it over first. The last member is the exception: there is nobody
+      // to hand it to, and an empty group appears in no one's list.
+      if (conversation.createdBy === userId && members.length > 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Transfer ownership before leaving the group",
+        });
+      }
+
+      await db
+        .delete(conversationParticipants)
+        .where(
+          and(
+            eq(conversationParticipants.conversationId, input.conversationId),
+            eq(conversationParticipants.userId, userId)
+          )
+        );
+
+      // Announced after the delete, so the leaver is not in the audience —
+      // their client removes the conversation on its own.
+      await announceConversationChange(input.conversationId, db);
+      return { left: input.conversationId };
     }),
 
   markAsRead: authedQuery
