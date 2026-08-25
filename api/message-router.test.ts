@@ -236,3 +236,89 @@ describeIntegration("read receipts on message history (S-5)", () => {
     expect(rows).toHaveLength(2);
   });
 });
+
+describeIntegration("message history pagination (H-9)", () => {
+  let alice: Awaited<ReturnType<typeof createUser>>;
+  let bob: Awaited<ReturnType<typeof createUser>>;
+  let conversation: number;
+  // Oldest first, matching send order — the same order the API is expected
+  // to return a full, unpaged history in.
+  let messageIds: number[];
+
+  beforeEach(async () => {
+    await resetDatabase();
+    alice = await createUser({ name: "Alice" });
+    bob = await createUser({ name: "Bob" });
+    conversation = await createConversation([alice.id, bob.id]);
+
+    messageIds = [];
+    for (let i = 0; i < 12; i += 1) {
+      messageIds.push(await createMessage(conversation, alice.id, `message ${i}`));
+    }
+  });
+
+  // The gap this closes: the client asked for `limit: 50` and never moved it,
+  // so a conversation past 50 messages was silently truncated with no way
+  // back into its own history. The server side of the fix was already
+  // correct and simply untested — these pin it.
+  it("returns the newest page in oldest-first order", async () => {
+    const page = await caller(alice).message.listByConversation({
+      conversationId: conversation,
+      limit: 5,
+    });
+
+    expect(page.map((m) => m.id)).toEqual(messageIds.slice(-5));
+  });
+
+  it("moves the window back with offset, and the two pages do not overlap", async () => {
+    const newest = await caller(alice).message.listByConversation({
+      conversationId: conversation,
+      limit: 5,
+      offset: 0,
+    });
+    const older = await caller(alice).message.listByConversation({
+      conversationId: conversation,
+      limit: 5,
+      offset: 5,
+    });
+
+    expect(newest.map((m) => m.id)).toEqual(messageIds.slice(-5));
+    expect(older.map((m) => m.id)).toEqual(messageIds.slice(-10, -5));
+
+    const overlap = older.filter((m) => newest.some((n) => n.id === m.id));
+    expect(overlap).toEqual([]);
+  });
+
+  it("increasing the limit alone reproduces the whole history in one page", async () => {
+    // This is the shape the client actually uses: rather than walking pages
+    // with offset, it re-requests a larger `limit` from offset 0 each time
+    // "load older" is clicked.
+    const page = await caller(alice).message.listByConversation({
+      conversationId: conversation,
+      limit: 100,
+    });
+
+    expect(page.map((m) => m.id)).toEqual(messageIds);
+  });
+
+  it("reports fewer rows than requested once the conversation's start is reached", async () => {
+    const page = await caller(alice).message.listByConversation({
+      conversationId: conversation,
+      limit: 50,
+    });
+
+    // The client's `hasMoreOlderMessages` reads exactly this signal.
+    expect(page.length).toBeLessThan(50);
+    expect(page).toHaveLength(12);
+  });
+
+  it("returns nothing past the end of a shorter conversation", async () => {
+    const page = await caller(alice).message.listByConversation({
+      conversationId: conversation,
+      limit: 5,
+      offset: 12,
+    });
+
+    expect(page).toEqual([]);
+  });
+});

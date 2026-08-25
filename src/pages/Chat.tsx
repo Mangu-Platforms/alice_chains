@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
 import { useSearchParams } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
@@ -59,6 +59,12 @@ import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constant
 import { EmojiPicker } from "@/components/EmojiPicker";
 import { MediaDrawer } from "@/components/MediaDrawer";
 import {
+  hasMoreOlderMessages,
+  MESSAGE_PAGE_SIZE,
+  scrollTopAfterPrepend,
+  shouldScrollToNewest,
+} from "@/lib/pagination";
+import {
   counterState,
   filesFromClipboard,
   insertAtCaret,
@@ -100,6 +106,7 @@ export default function Chat() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageScrollAreaRef = useRef<HTMLDivElement>(null);
   const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
   // F-2. The message currently being edited in place, and its draft body.
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
@@ -140,11 +147,65 @@ export default function Chat() {
     { enabled: !!activeConversationId }
   );
 
-  const { data: messages, refetch: refetchMessages } =
+  // H-9. `loadedCount` grows by MESSAGE_PAGE_SIZE each time the reader asks
+  // for more; the query re-requests everything up to that count in one page
+  // rather than a true cursor walk, which keeps ordering simple at the cost
+  // of re-fetching the window on every click — an honest trade for a first
+  // pagination pass, not the final word on it.
+  const [loadedCount, setLoadedCount] = useState(MESSAGE_PAGE_SIZE);
+  const { data: messages, refetch: refetchMessages, isFetching: isFetchingMessages } =
     trpc.message.listByConversation.useQuery(
-      { conversationId: activeConversationId!, limit: 50 },
+      { conversationId: activeConversationId!, limit: loadedCount },
       { enabled: !!activeConversationId }
     );
+
+  // A fresh conversation starts back at one page; carrying the previous
+  // conversation's window across would either request far more than needed or
+  // silently show a shorter history than the reader last had open elsewhere.
+  useEffect(() => {
+    setLoadedCount(MESSAGE_PAGE_SIZE);
+  }, [activeConversationId]);
+
+  const hasOlderMessages = hasMoreOlderMessages(messages?.length ?? 0, loadedCount);
+
+  // Set just before `loadedCount` grows, read once the longer page has
+  // rendered, then cleared — the layout effect below is what actually moves
+  // the scrollbar; this only carries the "before" measurement across the
+  // render it has to survive.
+  const pendingOlderLoad = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+
+  const loadOlderMessages = useCallback(() => {
+    const viewport = messageScrollAreaRef.current?.querySelector<HTMLElement>(
+      "[data-radix-scroll-area-viewport]"
+    );
+    if (viewport) {
+      pendingOlderLoad.current = {
+        scrollHeight: viewport.scrollHeight,
+        scrollTop: viewport.scrollTop,
+      };
+    }
+    setLoadedCount((count) => count + MESSAGE_PAGE_SIZE);
+  }, []);
+
+  // Runs before the browser paints the longer list, so the reader never sees
+  // the jump this corrects — only a `useLayoutEffect` does that; a plain
+  // `useEffect` would let the scrolled-to-top flash render first.
+  useLayoutEffect(() => {
+    const pending = pendingOlderLoad.current;
+    if (!pending) return;
+    pendingOlderLoad.current = null;
+
+    const viewport = messageScrollAreaRef.current?.querySelector<HTMLElement>(
+      "[data-radix-scroll-area-viewport]"
+    );
+    if (!viewport) return;
+
+    viewport.scrollTop = scrollTopAfterPrepend(
+      pending.scrollHeight,
+      viewport.scrollHeight,
+      pending.scrollTop
+    );
+  }, [messages]);
 
   // F-1. Opening a conversation clears its badge. This writes
   // `conversation_participants.lastReadAt`, which is what `conversation.list`
@@ -512,9 +573,18 @@ export default function Chat() {
     };
   }, [socket]);
 
-  // Scroll to bottom on new messages
+  // H-9. Loading older history prepends to the array too, and used to yank
+  // the view down to the bottom on every one of those loads — which would
+  // have made "load older" worse than not having it, since each click erased
+  // the very scroll position `pendingOlderLoad` above works to preserve.
+  // `shouldScrollToNewest` tells the two cases apart by comparing which
+  // message is newest, not by array identity or length.
+  const previousMessagesRef = useRef<typeof messages>(undefined);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (shouldScrollToNewest(previousMessagesRef.current, messages)) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    previousMessagesRef.current = messages;
   }, [messages]);
 
   // ── P-UX-4 · going to a message ─────────────────────────────────────────
@@ -525,6 +595,12 @@ export default function Chat() {
   // above, its scroll is the one that lands.
   const [pendingJumpId, setPendingJumpId] = useState<number | null>(null);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // H-9 let this retry rather than give up on the first miss: a hit further
+  // back than one page is now reachable by loading more, not just further
+  // back than the thread can ever show. Bounded, so a message id that
+  // genuinely is not in this conversation cannot load its entire history.
+  const jumpLoadAttempts = useRef(0);
+  const MAX_JUMP_LOAD_ATTEMPTS = 10;
 
   useEffect(() => {
     if (pendingJumpId === null || !messages) return;
@@ -532,25 +608,34 @@ export default function Chat() {
     const node = document.querySelector<HTMLElement>(
       `[data-message-id="${pendingJumpId}"]`
     );
-    setPendingJumpId(null);
 
-    if (!node) {
-      // The thread renders the most recent 50 messages, so a hit from further
-      // back is simply not on the page. Saying so beats a click that appears
-      // to do nothing.
-      toast.info(t("media.messageNotLoaded"));
+    if (node) {
+      setPendingJumpId(null);
+      jumpLoadAttempts.current = 0;
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedMessageId(pendingJumpId);
+
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+      highlightTimer.current = setTimeout(
+        () => setHighlightedMessageId(null),
+        JUMP_HIGHLIGHT_MS
+      );
       return;
     }
 
-    node.scrollIntoView({ behavior: "smooth", block: "center" });
-    setHighlightedMessageId(pendingJumpId);
+    if (hasOlderMessages && jumpLoadAttempts.current < MAX_JUMP_LOAD_ATTEMPTS) {
+      jumpLoadAttempts.current += 1;
+      setLoadedCount((count) => count + MESSAGE_PAGE_SIZE);
+      return;
+    }
 
-    if (highlightTimer.current) clearTimeout(highlightTimer.current);
-    highlightTimer.current = setTimeout(
-      () => setHighlightedMessageId(null),
-      JUMP_HIGHLIGHT_MS
-    );
-  }, [pendingJumpId, messages]);
+    // Either the conversation's whole history is loaded and the id is
+    // genuinely not in it, or ten pages weren't enough — either way, saying
+    // so beats a click that appears to do nothing.
+    setPendingJumpId(null);
+    jumpLoadAttempts.current = 0;
+    toast.info(t("media.messageNotLoaded"));
+  }, [pendingJumpId, messages, hasOlderMessages]);
 
   useEffect(
     () => () => {
@@ -1238,13 +1323,33 @@ export default function Chat() {
               </div>
             )}
 
-            <ScrollArea className="flex-1 px-4">
+            <ScrollArea ref={messageScrollAreaRef} className="flex-1 px-4">
               {/*
                 A log, not a list: `role="log"` tells a screen reader that
                 entries are appended over time, which is what makes its
                 "read new entries" behaviour work.
               */}
               <div className="py-4 space-y-1" role="log" aria-label="Messages">
+                {hasOlderMessages && (
+                  <div className="flex justify-center pb-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={loadOlderMessages}
+                      disabled={isFetchingMessages}
+                      className="text-xs text-muted-foreground gap-1.5"
+                    >
+                      {isFetchingMessages ? (
+                        <>
+                          <Spinner className="w-3.5 h-3.5" />
+                          {t("action.loadingOlderMessages")}
+                        </>
+                      ) : (
+                        t("action.loadOlderMessages")
+                      )}
+                    </Button>
+                  </div>
+                )}
                 {messages?.map((msg, i) => {
                   const showAvatar =
                     !msg.isMine &&

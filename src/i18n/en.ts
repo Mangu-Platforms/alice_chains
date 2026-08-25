@@ -113,7 +113,11 @@ export const en = {
   "media.empty": "Nothing shared yet",
   "media.emptyHint": "Photos and files sent in this conversation collect here.",
   "media.messageNotLoaded":
-    "That message is further back than the part of the conversation loaded here.",
+    "That message could not be found in this conversation.",
+
+  // ── Loading older history (H-9) ────────────────────────────────────────
+  "action.loadOlderMessages": "Load older messages",
+  "action.loadingOlderMessages": "Loading…",
 } as const;
 
 export type MessageKey = keyof typeof en;
