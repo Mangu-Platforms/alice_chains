@@ -50,6 +50,13 @@ export function isImageMimeType(value: string): boolean {
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /** How long an upload target stays valid. */
+/**
+ * Avatars are much smaller than attachments, deliberately: one is rendered at
+ * 40 pixels in a list of a hundred, and a 25 MB image there is a bad day for
+ * whoever is on mobile data.
+ */
+export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 
 /** How long a download link stays valid. */

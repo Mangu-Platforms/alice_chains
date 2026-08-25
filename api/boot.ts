@@ -24,7 +24,10 @@ import {
   verifyStorageToken,
   writeLocalObject,
 } from "./lib/storage/local";
-import { sanitizeFileName } from "./lib/storage";
+import { sanitizeFileName, getStorage } from "./lib/storage";
+import { authenticateRequest } from "./kimi/auth";
+import { users } from "@db/schema";
+import { eq } from "drizzle-orm";
 import { MAX_ATTACHMENT_BYTES } from "@contracts/attachments";
 import { MAX_JSON_BODY_BYTES } from "@contracts/constants";
 import { API_PORT, DEFAULT_PROD_PORT } from "@contracts/constants";
@@ -263,6 +266,65 @@ app.get("/api/files/download", async (c) => {
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
         "Cache-Control": "private, max-age=3600",
+      },
+    });
+  } catch {
+    return c.json({ error: "Not Found" }, 404);
+  }
+});
+
+/**
+ * P-PROF-1 · a member's avatar, at a stable URL.
+ *
+ * Not a presigned link: an avatar appears beside every message, in the sidebar
+ * and in the member list, and a URL that expires mid-session would leave a page
+ * full of broken images. So it is served from here, and authorization is a
+ * session rather than a signature.
+ *
+ * Any signed-in member may fetch any avatar. That is deliberate — an avatar is
+ * shown to everyone the member talks to, and gating it on a relationship would
+ * make the picture flicker as one forms. It is still not public: an
+ * unauthenticated request gets nothing.
+ */
+app.get("/api/avatar/:userId", async (c) => {
+  const viewer = await authenticateRequest(c.req.raw.headers);
+  if (!viewer) return c.json({ error: "Unauthorized" }, 401);
+
+  const userId = Number(c.req.param("userId"));
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return c.json({ error: "Not Found" }, 404);
+  }
+
+  const [row] = await getDb()
+    .select({ avatarKey: users.avatarKey })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  if (!row?.avatarKey) return c.json({ error: "Not Found" }, 404);
+
+  // With the S3 driver the object is not on this disk, so the browser is sent
+  // to a short-lived signed URL instead. The redirect keeps the stable URL
+  // above regardless of which driver is configured.
+  if (env.STORAGE_DRIVER === "s3") {
+    const signed = await getStorage().createDownloadUrl({
+      key: row.avatarKey,
+      fileName: "avatar",
+      mimeType: "image/*",
+      inline: true,
+    });
+    return c.redirect(signed, 302);
+  }
+
+  try {
+    return new Response(Readable.toWeb(readLocalObject(row.avatarKey)) as ReadableStream, {
+      headers: {
+        "Content-Type": "image/*",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        // Short, because the URL is stable: a long cache would keep showing a
+        // picture the member has already replaced.
+        "Cache-Control": "private, max-age=300",
       },
     });
   } catch {

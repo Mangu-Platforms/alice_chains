@@ -95,3 +95,9 @@ export const MAX_JSON_BODY_BYTES = 256 * 1024;
  * different way.
  */
 export const MIN_SEARCH_QUERY_LENGTH = 2;
+
+/** Longest display name a member may set, matching `users.name`. */
+export const MAX_DISPLAY_NAME_LENGTH = 255;
+
+/** Longest status text, matching `users.status`. */
+export const MAX_STATUS_LENGTH = 100;

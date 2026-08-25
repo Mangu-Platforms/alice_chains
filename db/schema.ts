@@ -40,7 +40,15 @@ export const users = mysqlTable("users", {
   unionId: varchar("unionId", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }),
   email: varchar("email", { length: 320 }),
+  // The provider's avatar URL, set at sign-in. Left alone so a member who has
+  // never uploaded one keeps the picture they arrived with.
   avatar: text("avatar"),
+  // P-PROF-1. An uploaded avatar's storage key. When set it wins over
+  // `avatar`, and the client renders it through /api/avatar/{userId} — a
+  // stable, authorized URL rather than an expiring signed one, because an
+  // avatar appears in a hundred places and a link that goes stale mid-session
+  // is worse than an extra hop.
+  avatarKey: varchar("avatarKey", { length: 512 }),
   status: varchar("status", { length: 100 }).default("Hey there! I'm using Alice Chains."),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   // S-18. Deactivation is reversible and immediate: sessions are revoked and

@@ -16,6 +16,7 @@ import NotFound from "./pages/NotFound";
  */
 const Chat = lazy(() => import("./pages/Chat"));
 const Contacts = lazy(() => import("./pages/Contacts"));
+const Settings = lazy(() => import("./pages/Settings"));
 
 export default function App() {
   return (
@@ -37,6 +38,14 @@ export default function App() {
           element={
             <Suspense fallback={<AuthLayoutSkeleton />}>
               <Contacts />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <Suspense fallback={<AuthLayoutSkeleton />}>
+              <Settings />
             </Suspense>
           }
         />

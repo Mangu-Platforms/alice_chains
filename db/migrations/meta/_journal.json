@@ -71,6 +71,13 @@
       "when": 1787694188285,
       "tag": "0009_message_fulltext",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1787694798218,
+      "tag": "0010_loving_archangel",
+      "breakpoints": true
     }
   ]
 }

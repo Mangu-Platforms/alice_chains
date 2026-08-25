@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { trpc } from "@/providers/trpc";
 import { useNavigate } from "react-router";
 import {
@@ -27,6 +28,7 @@ import {
   FileText,
   Bell,
   BellOff,
+  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,7 +71,9 @@ export default function Chat() {
   // F-6. Permission is requested from a control the member pressed, never on
   // load — a prompt fired at arrival is the fastest route to a permanent no.
   const push = usePushNotifications();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // P-PROF-2. The sidebar reset on every navigation. It is a preference, not
+  // state, so it is remembered.
+  const [sidebarOpen, setSidebarOpen] = usePersistedState("sidebar-open", true);
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isMobile, setIsMobile] = useState(false);
@@ -714,6 +718,13 @@ export default function Chat() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => navigate("/settings")}
+                  className="gap-2"
+                >
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => navigate("/contacts")}
                   className="gap-2"
