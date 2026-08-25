@@ -18,6 +18,12 @@ interface ServerToClientEvents {
   userOffline: (data: { userId: number }) => void;
   onlineUsers: (userIds: number[]) => void;
   messageError: (data: { error: string }) => void;
+  /**
+   * The server found this connection's session revoked or expired and is about
+   * to close it (S-17). Sent before the disconnect so the client can say
+   * "signed out" rather than fall into a silent reconnect loop.
+   */
+  sessionExpired: () => void;
 }
 
 interface ClientToServerEvents {
@@ -47,7 +53,15 @@ export function useSocket() {
 
     socketRef.current = socket;
 
+    // A revoked session cannot be recovered by reconnecting, so stop trying and
+    // send the browser to the login page.
+    socket.on("sessionExpired", () => {
+      socket.disconnect();
+      window.location.href = "/login";
+    });
+
     return () => {
+      socket.off("sessionExpired");
       socket.disconnect();
     };
   }, []);

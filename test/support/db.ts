@@ -16,6 +16,7 @@ import {
   conversations,
   messageReads,
   messages,
+  sessions,
   users,
 } from "@db/schema";
 
@@ -31,6 +32,7 @@ const ALL_TABLES = [
   conversationParticipants,
   conversations,
   contacts,
+  sessions,
   users,
 ];
 

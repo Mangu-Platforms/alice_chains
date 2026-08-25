@@ -22,10 +22,17 @@ import {
   connectWithCookie,
   disconnectAll,
   nextEvent,
+  sessionCookieFor,
   settle,
   startSocketServer,
   type TestServer,
 } from "../test/support/socket";
+import { revalidateSockets } from "./socket";
+import {
+  decodeSessionToken,
+  revokeAllSessionsForUser,
+  revokeSession,
+} from "./kimi/session";
 import { getDb } from "./queries/connection";
 
 type Row = Awaited<ReturnType<typeof createUser>>;
@@ -173,5 +180,81 @@ describeIntegration("socket markAsRead authorization (S-8)", () => {
 
     const rows = await getDb().select().from(messageReads);
     expect(rows).toHaveLength(0);
+  });
+});
+
+/**
+ * BUILD_PLAN S-17 step 5 — an established socket re-checks its session.
+ *
+ * Case: TC-SOCK-24. A socket used to be authorized once at handshake and then
+ * trusted for its whole life, so signing out on one device left every open
+ * socket on every other device alive and receiving messages.
+ */
+describeIntegration("socket session re-validation (S-17)", () => {
+  let server: TestServer;
+  let alice: Row;
+  const open: ClientSocket[] = [];
+
+  beforeAll(async () => {
+    await resetDatabase();
+    server = await startSocketServer();
+  });
+
+  afterAll(async () => {
+    await server.close();
+    await resetDatabase();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase();
+    alice = await createUser({ name: "Alice" });
+  });
+
+  afterEach(async () => {
+    disconnectAll(...open.splice(0));
+    await settle(150);
+  });
+
+  it("leaves a socket alone while its session is live", async () => {
+    const socket = await connectAs(server.port, alice);
+    open.push(socket);
+    await settle();
+
+    await expect(revalidateSockets(server.io)).resolves.toBe(0);
+    expect(socket.connected).toBe(true);
+  });
+
+  // TC-SOCK-24
+  it("disconnects a socket whose session was revoked, telling it why", async () => {
+    const cookie = await sessionCookieFor(alice);
+    const socket = await connectWithCookie(server.port, cookie);
+    open.push(socket);
+    await settle();
+
+    const token = cookie.split("=").slice(1).join("=");
+    await revokeSession(decodeSessionToken(token)!.sid);
+
+    // `sessionExpired` carries no payload, so arrival is what is asserted:
+    // nextEvent rejects on timeout, and resolves with undefined on delivery.
+    const notified = nextEvent(socket, "sessionExpired");
+    await expect(revalidateSockets(server.io)).resolves.toBe(1);
+    await expect(notified).resolves.toBeUndefined();
+
+    await settle(200);
+    expect(socket.connected).toBe(false);
+  });
+
+  it("drops every device when the member signs out everywhere", async () => {
+    const phone = await connectWithCookie(server.port, await sessionCookieFor(alice));
+    const laptop = await connectWithCookie(server.port, await sessionCookieFor(alice));
+    open.push(phone, laptop);
+    await settle();
+
+    await revokeAllSessionsForUser(alice.id);
+
+    await expect(revalidateSockets(server.io)).resolves.toBe(2);
+    await settle(200);
+    expect(phone.connected).toBe(false);
+    expect(laptop.connected).toBe(false);
   });
 });

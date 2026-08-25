@@ -7,14 +7,16 @@
  * as production does. BUILD_PLAN S-7 grows this into the full harness.
  */
 import { createServer, type Server as HttpServer } from "node:http";
+import type { Server as SocketIOServer } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import type { AddressInfo } from "node:net";
-import { initSocket } from "../../api/socket";
-import { createSessionToken } from "../../api/kimi/session";
+import { initSocket, stopSessionRecheck } from "../../api/socket";
+import { startSession } from "../../api/kimi/session";
 import { Session } from "@contracts/constants";
 
 export interface TestServer {
   port: number;
+  io: SocketIOServer;
   close: () => Promise<void>;
 }
 
@@ -30,13 +32,27 @@ export async function startSocketServer(): Promise<TestServer> {
     port,
     // `io.close()` also closes the http server it was attached to, so closing
     // both would fail the second call with "Server is not running".
-    close: () => new Promise<void>((resolve) => io.close(() => resolve())),
+    io,
+    close: () =>
+      new Promise<void>((resolve) => {
+        stopSessionRecheck();
+        io.close(() => resolve());
+      }),
   };
 }
 
-/** A cookie header carrying a valid session for `user`. */
-export function sessionCookieFor(user: { id: number; unionId: string; name: string | null }) {
-  const token = createSessionToken({
+/**
+ * A cookie header carrying a valid session for `user`.
+ *
+ * Goes through `startSession`, so a real `sessions` row backs it exactly as it
+ * would in production — a hand-signed token with no row is rejected since S-17.
+ */
+export async function sessionCookieFor(user: {
+  id: number;
+  unionId: string;
+  name: string | null;
+}) {
+  const token = await startSession({
     userId: user.id,
     unionId: user.unionId,
     name: user.name ?? "User",
@@ -45,11 +61,11 @@ export function sessionCookieFor(user: { id: number; unionId: string; name: stri
 }
 
 /** Connect a client authenticated as `user`, resolving once connected. */
-export function connectAs(
+export async function connectAs(
   port: number,
   user: { id: number; unionId: string; name: string | null }
 ): Promise<ClientSocket> {
-  return connectWithCookie(port, sessionCookieFor(user));
+  return connectWithCookie(port, await sessionCookieFor(user));
 }
 
 /** Connect a client with an arbitrary cookie header. Rejects if refused. */

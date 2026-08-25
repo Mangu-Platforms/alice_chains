@@ -35,20 +35,39 @@ function baseAttributes(headers?: Headers) {
   };
 }
 
+/**
+ * The session cookie's name for this deployment.
+ *
+ * Over TLS it carries the `__Host-` prefix, which the browser only accepts on a
+ * cookie that is `Secure`, `Path=/` and has no `Domain` — so it cannot be
+ * planted by a sibling subdomain (SEC-C-07). Over plain http the prefix is
+ * dropped, because a browser would refuse the cookie outright and local
+ * development would be unable to sign in.
+ */
+export function sessionCookieName(headers?: Headers): string {
+  return isSecureContext(headers) ? Session.hostCookieName : Session.cookieName;
+}
+
 /** `Set-Cookie` for an established session. */
 export function serializeSessionCookie(token: string, headers?: Headers): string {
-  return cookie.serialize(Session.cookieName, token, {
+  return cookie.serialize(sessionCookieName(headers), token, {
     ...baseAttributes(headers),
     maxAge: Session.maxAgeSeconds,
   });
 }
 
-/** `Set-Cookie` that removes the session cookie. */
-export function clearSessionCookie(headers?: Headers): string {
-  return cookie.serialize(Session.cookieName, "", {
-    ...baseAttributes(headers),
-    maxAge: 0,
-  });
+/**
+ * `Set-Cookie` that removes the session cookie.
+ *
+ * Both names are cleared: a deployment that gains TLS must still be able to
+ * remove the cookie it issued beforehand, and a browser only matches on name.
+ */
+export function clearSessionCookie(headers?: Headers): string[] {
+  const attributes = { ...baseAttributes(headers), maxAge: 0 };
+  return [
+    cookie.serialize(Session.hostCookieName, "", { ...attributes, secure: true }),
+    cookie.serialize(Session.cookieName, "", attributes),
+  ];
 }
 
 /**
@@ -82,7 +101,14 @@ export function readCookie(headers: Headers, name: string): string | undefined {
   return cookie.parse(header)[name] || undefined;
 }
 
-/** Read the session cookie. */
+/**
+ * Read the session cookie, preferring the `__Host-`-prefixed name.
+ *
+ * Both are accepted on the way in so a deployment that switches to TLS does not
+ * sign everyone out mid-session.
+ */
 export function parseSessionToken(headers: Headers): string | undefined {
-  return readCookie(headers, Session.cookieName);
+  return (
+    readCookie(headers, Session.hostCookieName) ?? readCookie(headers, Session.cookieName)
+  );
 }

@@ -2,9 +2,33 @@
 // in contracts/oauth.ts, which derives every provider URL from one origin.
 
 export const Session = {
+  /** Cookie name in development, and the suffix of the production name. */
   cookieName: "alice_session",
+  /**
+   * Production name. The `__Host-` prefix is enforced by the browser: it only
+   * accepts such a cookie when it carries `Secure`, `Path=/` and no `Domain`,
+   * which makes it un-settable by a subdomain (SEC-C-07).
+   */
+  hostCookieName: "__Host-alice_session",
+  /** Absolute lifetime, from issue. */
   maxAgeSeconds: 60 * 60 * 24 * 7,
+  /** Idle lifetime, from last use. Whichever expires first wins. */
+  idleMaxAgeSeconds: 60 * 60 * 24,
+  /**
+   * How stale `sessions.lastSeenAt` may get before a request refreshes it.
+   * Without this an active session costs a write on every request.
+   */
+  lastSeenRefreshSeconds: 5 * 60,
+  /**
+   * Payload format version. Raising `minimumVersion` invalidates every token
+   * issued under an older format without waiting out the absolute maximum.
+   */
+  payloadVersion: 1,
+  minimumVersion: 1,
 } as const;
+
+/** How often an established socket re-checks that its session is still valid. */
+export const SOCKET_SESSION_RECHECK_MS = 5 * 60 * 1000;
 
 /**
  * Port contract.
@@ -40,3 +64,9 @@ export const MIN_USER_SEARCH_LENGTH = 3;
 
 /** Most rows `contact.searchUsers` will return for one query. */
 export const USER_SEARCH_LIMIT = 20;
+
+/**
+ * Shortest accepted `APP_SECRET` / `JWT_SECRET`. `api/lib/env.ts` accepted a
+ * single character until S-17, which made every session forgeable.
+ */
+export const MIN_SECRET_LENGTH = 32;

@@ -17,7 +17,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 
 > S-0 absorbs what an earlier revision of this backlog called "S-1 · make CI green + commit a lockfile". There is no S-1.
 
-## Wave 1 — Correctness & security P0
+## Wave 1 — Correctness & security P0 ✅
 
 *Every task here closes a path by which a signed-in user reaches data that is not theirs. Ship this wave before anything else.*
 
@@ -28,7 +28,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-10** | Close the directory-enumeration leak (`contact.searchUsers`) and the presence broadcast leak | P0 | — | ✅ Done |
 | **S-4** | OAuth coherence: origin-only `VITE_KIMI_AUTH_URL`, `PUBLIC_BASE_URL` for both `redirect_uri` legs, `state`, PKCE S256 | P0 | — | ✅ Done |
 | **S-5** | Fix read receipts (`inArray` instead of interpolated `IN (?)`) and message-router query hygiene | P0 | — | ✅ Done |
-| **S-17** | Session lifecycle hardening — `Secure` + `__Host-` cookie from one helper, session-id rotation on login, server-side revocation on logout, 24 h idle expiry, payload version, ≥ 32-byte secrets (`api/lib/env.ts` accepts 1 character today) | P0 | S-4 (ship after or with it) | Not started |
+| **S-17** | Session lifecycle hardening — `Secure` + `__Host-` cookie from one helper, session-id rotation on login, server-side revocation on logout, 24 h idle expiry, payload version, ≥ 32-byte secrets | P0 | S-4 | ✅ Done |
 
 ## Wave 2 — Data integrity
 
@@ -75,7 +75,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | ID | Title | Status |
 |---|---|---|
 | **H-1** | Archive the 11.5 MB `alice.pdf` out of the repository root | Not started |
-| **H-2** | Delete the duplicated `getSessionCookieOptions` and the dead `api/lib/http.ts` | Not started |
+| **H-2** | Delete the duplicated `getSessionCookieOptions` and the dead `api/lib/http.ts` | ✅ Done — absorbed by S-17 step 2 (SEC-C-08) |
 | **H-3** | Give `.prettierignore` real contents; drop the stale `copilot/*` branches | Not started |
 | **H-4** | Remove the orphan `tsconfig.app.json` / `tsconfig.server.json` | Not started |
 | **H-5** | Reconcile the "JWT" wording in `README.md` and `info.md` — sessions are HMAC-signed cookies | Not started |

@@ -7,7 +7,8 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
-import { clearSessionCookie } from "./lib/cookies";
+import { clearSessionCookie, parseSessionToken } from "./lib/cookies";
+import { decodeSessionToken, revokeSession } from "./kimi/session";
 import { createOAuthCallbackHandler, createOAuthLoginHandler } from "./kimi/auth";
 import { OAUTH_CALLBACK_PATH, OAUTH_LOGIN_PATH } from "@contracts/oauth";
 import { initSocket } from "./socket";
@@ -18,10 +19,25 @@ const app = new Hono<{ Bindings: HttpBindings }>();
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.get(OAUTH_LOGIN_PATH, createOAuthLoginHandler());
 app.get(OAUTH_CALLBACK_PATH, createOAuthCallbackHandler());
-app.get("/api/logout", (c) => new Response(null, {
-  status: 302,
-  headers: { Location: "/login", "Set-Cookie": clearSessionCookie(c.req.raw.headers) },
-}));
+/**
+ * Logout revokes the server-side session BEFORE clearing the cookie, so a copy
+ * of the cookie taken beforehand is dead everywhere — not merely absent from
+ * this browser, which is all the previous implementation achieved.
+ */
+app.get("/api/logout", async (c) => {
+  const headers = c.req.raw.headers;
+  const token = parseSessionToken(headers);
+  if (token) {
+    const session = decodeSessionToken(token);
+    if (session?.sid) await revokeSession(session.sid);
+  }
+
+  const responseHeaders = new Headers({ Location: "/login" });
+  for (const cookie of clearSessionCookie(headers)) {
+    responseHeaders.append("Set-Cookie", cookie);
+  }
+  return new Response(null, { status: 302, headers: responseHeaders });
+});
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",

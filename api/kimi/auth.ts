@@ -1,4 +1,4 @@
-import { createSessionToken, getSessionToken, verifySessionToken } from "./session";
+import { getSessionToken, startSession, verifySessionToken } from "./session";
 import { findUserByUnionId, upsertUser } from "../queries/users";
 import { createOAuthAttempt, safeEqual } from "./pkce";
 import { env } from "../lib/env";
@@ -21,7 +21,7 @@ export async function authenticateRequest(headers: Headers) {
   }
 
   try {
-    const sessionData = verifySessionToken(sessionToken);
+    const sessionData = await verifySessionToken(sessionToken);
 
     if (sessionData?.unionId) {
       const user = await findUserByUnionId(sessionData.unionId);
@@ -195,12 +195,17 @@ export function createOAuthCallbackHandler() {
         return fail("Failed to create user", 500);
       }
 
-      const sessionToken = createSessionToken({
-        userId: user.id,
-        unionId: user.unionId,
-        name: user.name || "User",
-        email: user.email || undefined,
-      });
+      // A fresh session row, and therefore a fresh `sid`, on every sign-in:
+      // signing in again never revives a token that was revoked.
+      const sessionToken = await startSession(
+        {
+          userId: user.id,
+          unionId: user.unionId,
+          name: user.name || "User",
+          email: user.email || undefined,
+        },
+        { userAgent: headers.get("user-agent") }
+      );
 
       const responseHeaders = new Headers({ Location: "/" });
       for (const cookie of expiredCookies) responseHeaders.append("Set-Cookie", cookie);

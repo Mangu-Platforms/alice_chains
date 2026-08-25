@@ -104,3 +104,31 @@ export const contacts = mysqlTable("contacts", {
 
 export type Contact = typeof contacts.$inferSelect;
 export type InsertContact = typeof contacts.$inferInsert;
+
+// ─── Sessions (server-side record, SEC-C-05/06) ───────────────────────────
+//
+// The session cookie is a self-contained signed payload, so before S-17 there
+// was nothing to revoke: `/api/logout` cleared the caller's own cookie and a
+// copy taken beforehand stayed valid on every other device for the full seven
+// days. This table is the revocation point. The payload carries `sid`; the
+// server resolves it here on every request.
+export const sessions = mysqlTable("sessions", {
+  // A 32-byte random value, base64url — 43 characters.
+  id: varchar("id", { length: 43 }).primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true })
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  // Drives the 24-hour idle expiry. Refreshed at most once every 5 minutes so
+  // an active session does not cost a write on every request.
+  lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+  // Set by logout and by administrative deactivation (S-18). Non-null means the
+  // session is dead on every device, immediately.
+  revokedAt: timestamp("revokedAt"),
+  // A hash, never the raw header: useful for "you signed in from a new device"
+  // without retaining a fingerprint.
+  uaHash: varchar("uaHash", { length: 64 }),
+});
+
+export type Session = typeof sessions.$inferSelect;
+export type InsertSession = typeof sessions.$inferInsert;

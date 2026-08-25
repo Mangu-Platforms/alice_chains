@@ -4,10 +4,12 @@ import { getDb } from "./queries/connection";
 import { messages, messageReads, conversationParticipants } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
+import { getSessionToken, verifySessionToken } from "./kimi/session";
 import { isParticipant, messagesBelongToConversation, relatedUserIds } from "./lib/authz";
-import { MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
+import { MAX_READ_RECEIPT_BATCH, SOCKET_SESSION_RECHECK_MS } from "@contracts/constants";
 
 let io: SocketIOServer | null = null;
+let sessionRecheckTimer: ReturnType<typeof setInterval> | null = null;
 
 // Track online users
 const onlineUsers = new Map<number, Set<string>>();
@@ -18,6 +20,31 @@ export function getIO() {
 
 export function getOnlineUsers() {
   return new Map(Array.from(onlineUsers, ([id, sockets]) => [id, new Set(sockets)]));
+}
+
+/**
+ * Disconnect every socket whose session is no longer valid.
+ *
+ * Exported so a test can drive one sweep directly rather than waiting out
+ * SOCKET_SESSION_RECHECK_MS.
+ */
+export async function revalidateSockets(server: SocketIOServer): Promise<number> {
+  const open = await server.fetchSockets();
+  let dropped = 0;
+
+  for (const socket of open) {
+    const token = socket.data.sessionToken as string | undefined;
+    const stillValid = token ? Boolean(await verifySessionToken(token)) : false;
+    if (stillValid) continue;
+
+    // Tell the client why before cutting it off, so it can show "signed out"
+    // rather than a bare reconnect loop.
+    socket.emit("sessionExpired");
+    socket.disconnect(true);
+    dropped += 1;
+  }
+
+  return dropped;
 }
 
 /**
@@ -54,8 +81,18 @@ export function initSocket(server: HttpServer) {
     const user = await authenticateRequest(headers);
     if (!user) return next(new Error("Unauthorized"));
     socket.data.userId = user.id;
+    // Kept so the connection can be re-checked while it is open. A socket used
+    // to be authorized once at handshake and then trusted for its whole life,
+    // so a session revoked at logout left every open socket alive (SEC-C-29).
+    socket.data.sessionToken = getSessionToken(headers);
     next();
   });
+
+  sessionRecheckTimer = setInterval(() => {
+    void revalidateSockets(io!);
+  }, SOCKET_SESSION_RECHECK_MS);
+  // Node should not stay alive purely to run this sweep.
+  sessionRecheckTimer.unref?.();
 
   io.on("connection", (socket: Socket) => {
     console.log("Socket connected:", socket.id);
@@ -253,4 +290,12 @@ export function initSocket(server: HttpServer) {
   });
 
   return io;
+}
+
+/** Stop the session sweep. Used by tests and by a graceful shutdown. */
+export function stopSessionRecheck() {
+  if (sessionRecheckTimer) {
+    clearInterval(sessionRecheckTimer);
+    sessionRecheckTimer = null;
+  }
 }
