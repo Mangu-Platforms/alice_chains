@@ -70,6 +70,37 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-20** | Accessibility and internationalisation baseline — WCAG 2.2 AA audit and fixes, keyboard operation and focus management in the chat list, `aria-live` announcements, message catalogue and locale-aware timestamps | P1 | — | Not started |
 | **S-19** | Horizontal scale readiness — Socket.IO Redis adapter and Redis-backed presence behind `REDIS_URL`, capped TLS pool, two-node proof | P2 | S-15 | **Gated** — build only when the [ADR-006](docs/ADR.md) trigger fires: `socket_connections_active` > 6 000 per node for 15 min on 3 days in 14 |
 
+## Wave 6 — Product completeness
+
+*Authored after Wave 4 closed, per the no-uncarded-work rule. Cards in [BUILD_PLAN.md](docs/BUILD_PLAN.md).*
+
+| ID | Title | Pri | Depends on | Status |
+|---|---|---|---|---|
+| **P-SEARCH-1** | In-conversation message search (MySQL FULLTEXT or indexed LIKE; no search engine without an ADR) | P1 | S-3, F-2 | Not started |
+| **P-SEARCH-2** | Global search, scoped to the caller's conversations | P1 | P-SEARCH-1 | Not started |
+| **P-PROF-1** | Profile settings — display name, status, avatar, sign out everywhere | P1 | F-4, S-17 | Not started |
+| **P-PROF-2** | Persist the sidebar's collapsed state | P2 | — | Not started |
+| **P-UX-1** | Wire or remove every remaining stub; real empty states | P1 | — | Not started |
+| **P-UX-2** | Connection banner and an outbox for sends attempted while disconnected | P1 | — | Not started |
+| **P-UX-3** | Composer — shift+enter, character counter, emoji picker, paste-to-attach | P1 | F-4 | Not started |
+| **P-UX-4** | Thread search and media drawer | P2 | F-4, P-SEARCH-1 | Not started |
+| **P-LINK-1** | Detect URLs, render with `rel=noopener noreferrer`, no unfurling | P2 | — | Not started |
+
+## Wave 7 — Operator tooling
+
+| ID | Title | Pri | Status |
+|---|---|---|---|
+| **P-TOOL-1** | `scripts/dev.sh` — compose db, migrate, dev | P1 | Not started |
+| **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | Not started |
+| **P-TOOL-3** | `/healthz` and `/readyz` (readiness touches MySQL) | P1 | Not started — folded into S-15 |
+| **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | Not started — folded into S-15 |
+| **P-TOOL-5** | npm scripts for every operator task | P2 | Not started |
+| **P-TOOL-6** | Follow SETUP.md as a stranger; fix what fails | P1 | Not started |
+| **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | Not started |
+| **P-TOOL-8** | CI required checks documented in README | P2 | ✅ Done — with S-12 |
+| **P-TOOL-9** | `npm run db:seed` — demo data, dev-only guard | P1 | Not started |
+| **P-TOOL-10** | CONTRIBUTING.md | P2 | Not started |
+
 ### H — Hygiene (P2, each ≤ 30 min, no behaviour change)
 
 | ID | Title | Status |

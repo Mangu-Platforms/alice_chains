@@ -376,3 +376,140 @@ Waves 1–3 are the critical path to "complete, buildable, usable". Wave 4 is th
 5. The [TEST_PLAN.md](TEST_PLAN.md) catalogue passes, including the two-browser E2E scenarios.
 6. [TRACEABILITY.md](TRACEABILITY.md) shows every P0 requirement mapped to an owning task **and** a passing test, with no `†` (owed) and no `‡` (colliding) id left in the P0 rows of its §3 matrix or its §6 release gate. `SRS.md` §4–§5 remains the requirement spine; TRACEABILITY.md is the join across SRS.md, this document, TEST_PLAN.md, SECURITY.md and DATA_MODEL.md, and is maintained under its own rules M-1…M-6.
 7. `SETUP.md` reproduces a working environment when followed literally by someone who has never seen the repo.
+
+---
+
+## Wave 6 — Product completeness (`P-*`)
+
+Authored after Wave 4 closed, per the working agreement's rule that no work is
+uncarded. Waves 1–5 make the app correct, integral, tested and operable; these
+cards are what stand between that and an app a stranger would keep using.
+
+<a id="p-search-1"></a>
+### P-SEARCH-1 · In-conversation message search
+
+**Problem.** The chat header carries a search icon that does nothing
+(`src/pages/Chat.tsx`), and `conversation.list` filters only on the sidebar's
+display names. There is no way to find a message.
+**Do.** 1. Add a `message.search` procedure scoped to one conversation,
+authorized through `assertParticipant`. 2. Use a MySQL `FULLTEXT` index on
+`messages.content` where the collation allows, falling back to an indexed
+prefix `LIKE` — no Meilisearch or Elasticsearch without an ADR ([ADR-006](ADR.md)).
+3. Exclude soft-deleted messages. 4. Return enough context to render a result
+row and jump to it.
+**Satisfies:** NEW-FR-SEARCH-01 · **Tests:** TC-SEARCH-01…04
+**Accept:** a member finds their own and others' messages in a conversation
+they belong to, finds nothing in one they do not, and deleted messages never
+appear. **Depends on:** S-3, F-2.
+
+<a id="p-search-2"></a>
+### P-SEARCH-2 · Global search
+
+**Problem.** Search that stops at one conversation is not how anyone looks for
+a message they half-remember.
+**Do.** Extend to every conversation the caller belongs to, grouped by
+conversation, with the same authorization boundary applied per row rather than
+per request.
+**Satisfies:** NEW-FR-SEARCH-02 · **Tests:** TC-SEARCH-05…07
+**Accept:** results span conversations, never include one the caller is not in,
+and are capped. **Depends on:** P-SEARCH-1.
+
+<a id="p-prof-1"></a>
+### P-PROF-1 · Profile and account settings
+
+**Problem.** `users.name`, `users.avatar` and `users.status` are written once at
+sign-in from the OAuth provider and can never be changed. "View Profile" was a
+menu item that did nothing until F-8 removed it.
+**Do.** 1. `user.updateProfile` for display name and status text.
+2. Avatar upload through F-4's storage. 3. "Sign out everywhere", on
+[S-17](#s-17)'s `revokeAllSessionsForUser`. 4. A settings page reachable from
+the header.
+**Satisfies:** NEW-FR-PROF-01…03 · **Tests:** TC-PROF-01…05
+**Accept:** a changed name appears for other members without a reload; signing
+out everywhere drops every other device's socket within the S-17 window.
+**Depends on:** F-4, S-17.
+
+<a id="p-prof-2"></a>
+### P-PROF-2 · Remembered UI state
+
+**Problem.** The sidebar's collapsed state resets on every navigation.
+**Do.** Persist it to `localStorage` under one namespaced key. Do not introduce
+a second theme system — the app is dark-only by design.
+**Satisfies:** NEW-FR-PROF-04 · **Tests:** TC-PROF-06
+**Accept:** the sidebar remembers its state across a reload, and a first-time
+visitor gets the sensible default.
+
+<a id="p-ux-1"></a>
+### P-UX-1 · No control that lies
+
+**Problem.** Several buttons still do nothing when pressed. Empty states are
+missing or generic.
+**Do.** Wire or remove every remaining stub. Give zero conversations, zero
+contacts and zero search hits states that say what to do next.
+**Satisfies:** NEW-FR-UX-01 · **Tests:** TC-UX-01…03
+**Accept:** every visible control either acts or is absent.
+
+<a id="p-ux-2"></a>
+### P-UX-2 · Connection state and outbox
+
+**Problem.** A send attempted while the socket is down is lost silently: the
+composer clears and the message never arrives.
+**Do.** A connection banner, and an in-memory outbox that replays on reconnect.
+**Satisfies:** NEW-FR-UX-02 · **Tests:** TC-UX-04…06
+**Accept:** a message composed while disconnected is delivered on reconnect,
+exactly once, and the member is told what is happening meanwhile.
+
+<a id="p-ux-3"></a>
+### P-UX-3 · The composer
+
+**Problem.** Enter-to-send exists; nothing else does. No character counter
+against the 4000 cap, no emoji picker, no paste-to-attach.
+**Do.** Shift+Enter for a newline, a counter that appears as the cap nears, an
+emoji picker, and paste-image straight into F-4's upload path.
+**Satisfies:** NEW-FR-UX-03 · **Tests:** TC-UX-07…09
+**Accept:** each behaviour works with a keyboard alone. **Depends on:** F-4.
+
+<a id="p-ux-4"></a>
+### P-UX-4 · Thread search and media drawer
+
+**Problem.** F-4 added `attachment.listForConversation` and nothing renders it.
+**Do.** A drawer listing a conversation's images and files, and in-thread search
+built on P-SEARCH-1.
+**Satisfies:** NEW-FR-UX-04 · **Tests:** TC-UX-10
+**Accept:** every attachment in a conversation is reachable without scrolling
+the thread. **Depends on:** F-4, P-SEARCH-1.
+
+<a id="p-link-1"></a>
+### P-LINK-1 · Safe link rendering
+
+**Problem.** A URL in a message renders as plain text.
+**Do.** Detect URLs and render anchors with `rel="noopener noreferrer"` and
+`target="_blank"`. No unfurling — that would make the server fetch arbitrary
+URLs on a member's behalf, which is an SSRF surface, not a feature.
+**Satisfies:** NEW-FR-LINK-01 · **Tests:** TC-LINK-01…03
+**Accept:** links are clickable and carry the rel attributes; a `javascript:`
+URL is never rendered as a link.
+
+---
+
+## Wave 7 — Operator tooling (`P-TOOL-*`)
+
+The half of "complete" that is not the member-facing app. Ships with
+[Wave 5](#wave-5--hardening--scale).
+
+| ID | Task | Accept |
+|---|---|---|
+| **P-TOOL-1** | `scripts/dev.sh` — bring up the database, migrate, run dev | One command from a clean clone to a running app |
+| **P-TOOL-2** | `scripts/reset-dev.sh` — wipe the local volume and re-migrate, documented as destructive and refusing to run against a non-local `DATABASE_URL` | Destroys only local data, and says so before it does |
+| **P-TOOL-3** | `/healthz` liveness and `/readyz` that touches MySQL | A database outage shows as not-ready, not as healthy |
+| **P-TOOL-4** | Structured logs with a request id; no bodies, no secrets | A request can be followed end to end; no message content in any log |
+| **P-TOOL-5** | npm scripts for validate, dev, migrate, compose up/down | `npm run` lists everything an operator needs |
+| **P-TOOL-6** | Follow SETUP.md as a stranger and fix whatever fails | A clean clone reaches a running app with no undocumented step |
+| **P-TOOL-7** | `.env.example` complete, with the generate-secret one-liner | Every variable the code reads is documented |
+| **P-TOOL-8** | CI required checks documented in the README | A contributor knows what must pass before review |
+| **P-TOOL-9** | `npm run db:seed` — two demo users, a DM and a group, dev-only guarded | A new contributor sees a populated app without an OAuth provider |
+| **P-TOOL-10** | CONTRIBUTING.md — one task, one PR, validate green | The working agreement is written down where contributors look |
+
+> **S-19 remains gated.** The [ADR-006](ADR.md) trigger has not fired, and
+> building a Redis adapter for a deployment that does not exist is speculative
+> work with real maintenance cost.
