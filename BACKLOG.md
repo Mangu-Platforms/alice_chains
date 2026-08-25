@@ -84,7 +84,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **P-UX-2** | Connection banner and an outbox for sends attempted while disconnected | P1 | — | Not started |
 | **P-UX-3** | Composer — shift+enter, character counter, emoji picker, paste-to-attach | P1 | F-4 | Not started |
 | **P-UX-4** | Thread search and media drawer | P2 | F-4, P-SEARCH-1 | Not started |
-| **P-LINK-1** | Detect URLs, render with `rel=noopener noreferrer`, no unfurling | P2 | — | Not started |
+| **P-LINK-1** | Detect URLs, render with `rel=noopener noreferrer`, no unfurling | P2 | — | ✅ Done |
 
 ## Wave 7 — Operator tooling
 

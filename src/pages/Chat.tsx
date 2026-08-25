@@ -50,6 +50,7 @@ import {
 import { toast } from "sonner";
 import { t, formatTime, formatMessageTimestamp } from "@/i18n";
 import { LiveRegion } from "@/components/LiveRegion";
+import { Linkify } from "@/lib/linkify";
 import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
 import {
@@ -1140,7 +1141,12 @@ export default function Chat() {
                               </div>
                             </div>
                           ) : (
-                            <p>{msg.content}</p>
+                            // P-LINK-1. Still text: `Linkify` returns React
+                            // elements from a parsed split, never markup from
+                            // message content, so FR-MSG-18 holds.
+                            <p className="whitespace-pre-wrap break-words">
+                              <Linkify text={msg.content} />
+                            </p>
                           )}
                           <div
                             className={`flex items-center gap-1 mt-1 ${
