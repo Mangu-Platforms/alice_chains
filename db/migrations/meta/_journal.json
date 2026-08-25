@@ -36,6 +36,13 @@
       "when": 1787687879451,
       "tag": "0004_noisy_stone_men",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1787689452850,
+      "tag": "0005_rapid_mandrill",
+      "breakpoints": true
     }
   ]
 }

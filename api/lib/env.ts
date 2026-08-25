@@ -44,6 +44,26 @@ const envSchema = z.object({
   PUBLIC_BASE_URL: bareOrigin("PUBLIC_BASE_URL").optional(),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   OWNER_UNION_ID: z.string().optional(),
+
+  // ─── Attachment storage (F-4) ──────────────────────────────────────────
+  // "local" writes to the filesystem and needs no infrastructure, which is why
+  // it is the default: `npm run dev` and `docker compose up` both give a
+  // working attachment flow out of the box. "s3" talks to MinIO or S3 and is
+  // what a multi-node deployment must use, since local files live on one disk.
+  STORAGE_DRIVER: z.enum(["local", "s3"]).default("local"),
+  STORAGE_LOCAL_DIR: z.string().default("./storage"),
+  S3_ENDPOINT: z.string().optional(),
+  S3_REGION: z.string().default("us-east-1"),
+  S3_BUCKET: z.string().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
+  // MinIO serves path-style (http://host/bucket/key); AWS prefers virtual-host
+  // style. Wrong choice here produces a signature mismatch, not a 404, so it
+  // is explicit rather than guessed.
+  S3_FORCE_PATH_STYLE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 /**
@@ -88,6 +108,21 @@ function assertNoLeakedSecrets(source: Record<string, unknown>) {
 assertNoLeakedSecrets(process.env);
 
 export const env = envSchema.parse(process.env);
+
+// Fail at boot rather than on the first upload: an operator who selects the s3
+// driver and forgets a credential should learn immediately.
+if (env.STORAGE_DRIVER === "s3") {
+  const missing = (
+    ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"] as const
+  ).filter((key) => !env[key]);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `STORAGE_DRIVER=s3 requires ${missing.join(", ")}. ` +
+        `Set them, or use STORAGE_DRIVER=local for filesystem storage.`
+    );
+  }
+}
 export const isProduction = env.NODE_ENV === "production";
 
 export function getPort() {

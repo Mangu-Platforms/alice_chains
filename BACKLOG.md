@@ -51,7 +51,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **F-1** | Unread message badges | P1 | S-3, S-11 | ✅ Done |
 | **F-2** | Message editing & soft deletion | P1 | S-3 | ✅ Done — also closes FR-MSG-11 (deterministic ordering) |
 | **F-3** | Emoji reactions | P1 | S-3 | ✅ Done |
-| **F-4** | File & image attachments (MinIO locally; no account needed) | P1 | S-3, S-6 | Not started |
+| **F-4** | File & image attachments (MinIO locally; no account needed) | P1 | S-3, S-6 | ✅ Done — filesystem driver by default, S3/MinIO behind `STORAGE_DRIVER=s3` |
 | **F-5** | Reply threading UI | P1 | S-3 | ✅ Done — also closes FR-MSG-15 |
 | **F-6** | Web push notifications (self-generated VAPID keys locally) | P1 | S-3 | Not started |
 | **F-7** | Group management — rename, avatar, add/remove participants, leave, ownership transfer | P2 | S-3, S-8, S-9 | ✅ Done |

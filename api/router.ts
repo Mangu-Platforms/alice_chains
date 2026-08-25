@@ -2,6 +2,7 @@ import { authRouter } from "./auth-router";
 import { conversationRouter } from "./conversation-router";
 import { messageRouter } from "./message-router";
 import { contactRouter } from "./contact-router";
+import { attachmentRouter } from "./attachment-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -10,6 +11,7 @@ export const appRouter = createRouter({
   conversation: conversationRouter,
   message: messageRouter,
   contact: contactRouter,
+  attachment: attachmentRouter,
 });
 
 export type AppRouter = typeof appRouter;

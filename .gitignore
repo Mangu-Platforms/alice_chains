@@ -30,3 +30,6 @@ npm-debug.log*
 .cache
 temp
 tmp
+
+# F-4 local attachment storage (STORAGE_DRIVER=local)
+/storage/

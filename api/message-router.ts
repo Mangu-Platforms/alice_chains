@@ -12,6 +12,7 @@ import {
   isParticipant,
 } from "./lib/authz";
 import { emitToConversation, emitToMembers } from "./lib/realtime";
+import { attachToMessage, attachmentsForMessages } from "./attachment-router";
 import { messages, messageReactions, messageReads, users } from "@db/schema";
 import { MAX_MESSAGE_LENGTH, MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
@@ -191,12 +192,16 @@ export const messageRouter = createRouter({
         readsByMessage.set(r.messageId, arr);
       }
 
-      const reactionsByMessage = await reactionsFor(messageIds, userId, db);
+      const [reactionsByMessage, attachmentsByMessage] = await Promise.all([
+        reactionsFor(messageIds, userId, db),
+        attachmentsForMessages(messageIds, db),
+      ]);
 
       return msgs.reverse().map((m) => ({
         ...m,
         readBy: readsByMessage.get(m.id) || [],
         reactions: reactionsByMessage.get(m.id) ?? [],
+        attachments: attachmentsByMessage.get(m.id) ?? [],
         isMine: m.senderId === userId,
       }));
     }),
@@ -205,10 +210,12 @@ export const messageRouter = createRouter({
     .input(
       z.object({
         conversationId: z.number(),
-        content: z.string().min(1).max(MAX_MESSAGE_LENGTH),
+        // A message with an attachment may have no text of its own, so the
+        // minimum is zero and the guard below requires one or the other.
+        content: z.string().max(MAX_MESSAGE_LENGTH).default(""),
         type: z.enum(["text", "image", "file"]).default("text"),
-        fileUrl: z.string().optional(),
         replyToId: z.number().optional(),
+        attachmentIds: z.array(z.number().int().positive()).max(10).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -220,6 +227,14 @@ export const messageRouter = createRouter({
       // blocked by anyone else in the conversation cannot send into it.
       await assertNotBlockedInConversation(userId, input.conversationId, db);
 
+      const attachmentIds = input.attachmentIds ?? [];
+      if (input.content.trim().length === 0 && attachmentIds.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "A message needs text or an attachment",
+        });
+      }
+
       // Shared with the socket path so `conversations.updatedAt` is touched
       // whichever door the message came through (S-11).
       const stored = await insertMessage({
@@ -227,9 +242,15 @@ export const messageRouter = createRouter({
         senderId: userId,
         content: input.content,
         type: input.type,
-        fileUrl: input.fileUrl,
         replyToId: input.replyToId,
       });
+
+      // Bound after the message exists, because `attachments.messageId` has a
+      // foreign key. Each binding re-checks ownership and readiness, so one
+      // upload cannot be re-used to place a file in a second conversation.
+      for (const attachmentId of attachmentIds) {
+        await attachToMessage(attachmentId, stored.id, userId, db);
+      }
 
       return { ...stored, isMine: true };
     }),

@@ -12,6 +12,14 @@ import { decodeSessionToken, revokeSession } from "./kimi/session";
 import { createOAuthCallbackHandler, createOAuthLoginHandler } from "./kimi/auth";
 import { OAUTH_CALLBACK_PATH, OAUTH_LOGIN_PATH } from "@contracts/oauth";
 import { initSocket } from "./socket";
+import { Readable } from "node:stream";
+import {
+  readLocalObject,
+  verifyStorageToken,
+  writeLocalObject,
+} from "./lib/storage/local";
+import { sanitizeFileName } from "./lib/storage";
+import { MAX_ATTACHMENT_BYTES } from "@contracts/attachments";
 import { API_PORT, DEFAULT_PROD_PORT } from "@contracts/constants";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -46,6 +54,66 @@ app.use("/api/trpc/*", async (c) => {
     createContext,
   });
 });
+/**
+ * F-4 · the local storage driver's upload and download endpoints.
+ *
+ * These exist only for `STORAGE_DRIVER=local`. With `s3` the client PUTs and
+ * GETs the object store directly and never reaches this process, which is the
+ * point of presigned URLs — the bytes do not pass through Node either way.
+ *
+ * Authorization here is the signed token, not the session: the token pins the
+ * key, the declared type, the declared size and an expiry, and was issued by a
+ * procedure that already checked conversation membership. That is the same
+ * bearer model a presigned S3 URL uses.
+ */
+app.put("/api/files/upload", async (c) => {
+  const claims = verifyStorageToken(c.req.query("token") ?? "", "put");
+  if (!claims) return c.json({ error: "Invalid or expired upload token" }, 403);
+
+  const declaredType = c.req.header("content-type")?.split(";")[0]?.trim();
+  if (declaredType !== claims.mimeType) {
+    return c.json({ error: "Content-Type does not match the upload token" }, 400);
+  }
+
+  const body = Buffer.from(await c.req.raw.arrayBuffer());
+
+  // The token's size is what the upload was authorized for. A client that
+  // declares 1 KB and sends 100 MB is refused here, before anything is written.
+  if (body.byteLength > claims.byteSize || body.byteLength > MAX_ATTACHMENT_BYTES) {
+    return c.json({ error: "Upload is larger than declared" }, 413);
+  }
+
+  await writeLocalObject(claims.key, body);
+  return c.json({ ok: true, byteSize: body.byteLength });
+});
+
+app.get("/api/files/download", async (c) => {
+  const claims = verifyStorageToken(c.req.query("token") ?? "", "get");
+  if (!claims) return c.json({ error: "Invalid or expired link" }, 403);
+
+  const fileName = sanitizeFileName(c.req.query("name") ?? "file");
+  const disposition = c.req.query("disposition") === "inline" ? "inline" : "attachment";
+
+  try {
+    const stream = readLocalObject(claims.key);
+    return new Response(Readable.toWeb(stream) as ReadableStream, {
+      headers: {
+        // The recorded type, never one derived from the stored bytes or from a
+        // client-supplied name.
+        "Content-Type": claims.mimeType,
+        "Content-Disposition": `${disposition}; filename="${fileName}"`,
+        // Uploaded content is served from the app's own origin, so it is
+        // sandboxed as tightly as a download can be.
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cache-Control": "private, max-age=3600",
+      },
+    });
+  } catch {
+    return c.json({ error: "Not Found" }, 404);
+  }
+});
+
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 export default app;

@@ -233,6 +233,55 @@ export const messageReactions = mysqlTable(
 
 export type MessageReaction = typeof messageReactions.$inferSelect;
 
+// ─── Attachments (F-4) ────────────────────────────────────────────────────
+//
+// `messageId` is nullable because an upload is created BEFORE the message that
+// references it: the client asks for an upload target, puts the bytes, then
+// sends a message naming the attachment. A row that never gets a message is an
+// abandoned upload, reaped after 24 hours.
+//
+// This deprecates `messages.fileUrl`, which is kept and no longer written; it
+// is dropped in a later migration, after a backfill.
+export const attachments = mysqlTable(
+  "attachments",
+  {
+    id: serial("id").primaryKey(),
+    messageId: bigint("messageId", { mode: "number", unsigned: true }),
+    uploaderId: bigint("uploaderId", { mode: "number", unsigned: true }).notNull(),
+    storageKey: varchar("storageKey", { length: 512 }).notNull(),
+    fileName: varchar("fileName", { length: 255 }).notNull(),
+    // 127 chars is the RFC 6838 practical maximum.
+    mimeType: varchar("mimeType", { length: 127 }).notNull(),
+    byteSize: bigint("byteSize", { mode: "number", unsigned: true }).notNull(),
+    width: bigint("width", { mode: "number", unsigned: true }),
+    height: bigint("height", { mode: "number", unsigned: true }),
+    checksumSha256: varchar("checksumSha256", { length: 64 }),
+    status: mysqlEnum("status", ["pending", "ready", "failed", "quarantined"])
+      .default("pending")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("attachments_storageKey_uq").on(t.storageKey),
+    index("attachments_message_idx").on(t.messageId),
+    index("attachments_uploader_created_idx").on(t.uploaderId, t.createdAt),
+    foreignKey({
+      name: "attachments_messageId_messages_id_fk",
+      columns: [t.messageId],
+      foreignColumns: [messages.id],
+    }).onDelete("cascade"),
+    // RESTRICT, like messages.senderId: deleting an account must go through an
+    // explicit purge rather than silently orphaning stored bytes.
+    foreignKey({
+      name: "attachments_uploaderId_users_id_fk",
+      columns: [t.uploaderId],
+      foreignColumns: [users.id],
+    }).onDelete("restrict"),
+  ]
+);
+
+export type Attachment = typeof attachments.$inferSelect;
+
 // ─── Contacts (Friend relationships) ──────────────────────────────
 export const contacts = mysqlTable(
   "contacts",

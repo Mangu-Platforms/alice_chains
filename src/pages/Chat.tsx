@@ -23,11 +23,13 @@ import {
   Trash2,
   SmilePlus,
   Reply,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +46,12 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { MAX_MESSAGE_LENGTH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
+import {
+  ALLOWED_MIME_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  formatBytes,
+  isAllowedMimeType,
+} from "@contracts/attachments";
 
 export default function Chat() {
   const { user, logout } = useAuth();
@@ -123,6 +131,12 @@ export default function Chat() {
   // F-7. Group administration lives behind the header menu; every mutation
   // refetches the conversation and the sidebar, and the server also fans out
   // `conversationUpdated` so other members converge without acting.
+  // F-4. The paperclip was a button that did nothing. It now runs the
+  // three-step upload the server expects: ask for a target, PUT the bytes
+  // straight to storage, then send a message naming the attachment.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState("");
 
@@ -151,6 +165,77 @@ export default function Chat() {
   });
 
   const utils = trpc.useUtils();
+  const createUpload = trpc.attachment.createUpload.useMutation();
+  const completeUpload = trpc.attachment.complete.useMutation();
+  const sendWithAttachment = trpc.message.send.useMutation({
+    onSuccess: () => {
+      refetchMessages();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const handleFilesSelected = useCallback(
+    async (files: FileList | null) => {
+      if (!files?.length || !activeConversationId) return;
+      const file = files[0];
+
+      if (!isAllowedMimeType(file.type)) {
+        toast.error(`${file.type || "That file type"} cannot be attached.`);
+        return;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        toast.error(`Files must be ${formatBytes(MAX_ATTACHMENT_BYTES)} or smaller.`);
+        return;
+      }
+
+      setUploading(true);
+      try {
+        const target = await createUpload.mutateAsync({
+          conversationId: activeConversationId,
+          fileName: file.name,
+          mimeType: file.type as never,
+          byteSize: file.size,
+        });
+
+        // Straight to storage. With STORAGE_DRIVER=s3 this leaves the app
+        // entirely; with the local driver it hits the signed upload endpoint.
+        const put = await fetch(target.uploadUrl, {
+          method: "PUT",
+          headers: target.headers,
+          body: file,
+        });
+        if (!put.ok) throw new Error("The upload failed. Please try again.");
+
+        await completeUpload.mutateAsync({ attachmentId: target.attachmentId });
+
+        // Sent over tRPC rather than the socket, because only this path can
+        // carry an attachment id; the server fans the message out either way.
+        await sendWithAttachment.mutateAsync({
+          conversationId: activeConversationId,
+          content: messageInput.trim(),
+          attachmentIds: [target.attachmentId],
+          replyToId: replyingTo?.id,
+        });
+
+        setMessageInput("");
+        setReplyingTo(null);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "The upload failed.");
+      } finally {
+        setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    },
+    [
+      activeConversationId,
+      createUpload,
+      completeUpload,
+      sendWithAttachment,
+      messageInput,
+      replyingTo,
+    ]
+  );
   const afterGroupChange = (message: string) => () => {
     toast.success(message);
     utils.conversation.getById.invalidate();
@@ -900,6 +985,42 @@ export default function Chat() {
                                 </DropdownMenu>
                               )}
                           </div>
+                          {!msg.deletedAt &&
+                            msg.attachments.map((attachment) =>
+                              attachment.isImage ? (
+                                <a
+                                  key={attachment.id}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block mt-2"
+                                >
+                                  <img
+                                    src={attachment.url}
+                                    alt={attachment.fileName}
+                                    loading="lazy"
+                                    className="rounded-lg max-h-64 max-w-full object-contain bg-background/20"
+                                  />
+                                </a>
+                              ) : (
+                                <a
+                                  key={attachment.id}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download={attachment.fileName}
+                                  className="mt-2 flex items-center gap-2 px-2 py-1.5 rounded-lg bg-background/25 hover:bg-background/40 transition-colors"
+                                >
+                                  <FileText className="w-4 h-4 flex-shrink-0" />
+                                  <span className="flex-1 min-w-0 truncate text-xs">
+                                    {attachment.fileName}
+                                  </span>
+                                  <span className="text-[10px] opacity-70 flex-shrink-0">
+                                    {formatBytes(attachment.byteSize)}
+                                  </span>
+                                </a>
+                              )
+                            )}
                           {msg.reactions.length > 0 && !msg.deletedAt && (
                             <div className="flex flex-wrap gap-1 mt-1.5">
                               {msg.reactions.map((reaction) => (
@@ -1156,8 +1277,26 @@ export default function Chat() {
                 </div>
               )}
               <div className="flex items-end gap-2 max-w-4xl mx-auto">
-                <Button variant="ghost" size="icon" className="flex-shrink-0">
-                  <Paperclip className="w-5 h-5 text-muted-foreground" />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="sr-only"
+                  accept={ALLOWED_MIME_TYPES.join(",")}
+                  onChange={(e) => handleFilesSelected(e.target.files)}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="flex-shrink-0"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  aria-label={uploading ? "Uploading" : "Attach a file"}
+                >
+                  {uploading ? (
+                    <Spinner className="w-5 h-5" />
+                  ) : (
+                    <Paperclip className="w-5 h-5 text-muted-foreground" />
+                  )}
                 </Button>
                 <div className="flex-1 relative">
                   <textarea
