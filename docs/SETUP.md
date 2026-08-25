@@ -27,6 +27,18 @@ npm run db:seed
 The rest of this document is the same thing done by hand, plus everything the
 script does not do.
 
+To start over — wipe the local database and, unless `SKIP_DB=1`, the Docker
+volumes — run:
+
+```bash
+./scripts/reset-dev.sh          # or: npm run reset:dev
+```
+
+It refuses on anything but a local `DATABASE_URL`, names exactly what it is
+about to destroy before it destroys any of it, and requires typing `reset`
+rather than a keypress. `--yes` skips the prompt for a script that already
+asked.
+
 ---
 
 ## 1. Prerequisites

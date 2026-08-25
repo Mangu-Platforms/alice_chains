@@ -6,6 +6,11 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:up": "bash scripts/dev.sh",
+    "reset:dev": "bash scripts/reset-dev.sh",
+    "compose:up": "docker compose up -d",
+    "compose:up:s3": "docker compose --profile s3 up -d",
+    "compose:down": "docker compose down",
+    "compose:logs": "docker compose logs -f",
     "dev:server": "tsx watch --env-file-if-exists=.env api/boot.ts",
     "dev:client": "vite",
     "build": "tsc && vite build && esbuild api/boot.ts --platform=node --bundle --format=esm --outdir=dist --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",

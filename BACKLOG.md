@@ -91,10 +91,10 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | ID | Title | Pri | Status |
 |---|---|---|---|
 | **P-TOOL-1** | `scripts/dev.sh` — compose db, migrate, dev | P1 | ✅ Done — and fixed the fact that nothing loaded `.env` |
-| **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | Not started |
+| **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | ✅ Done — shares the tested local-database predicate from P-TOOL-9, refuses on a remote `DATABASE_URL`, names what it destroys, and requires typing `reset` |
 | **P-TOOL-3** | `/healthz` and `/readyz` (readiness touches MySQL) | P1 | ✅ Done — with S-15 |
 | **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | ✅ Done — with S-15 |
-| **P-TOOL-5** | npm scripts for every operator task | P2 | Not started |
+| **P-TOOL-5** | npm scripts for every operator task | P2 | ✅ Done — `dev:up`, `reset:dev`, `compose:up`/`compose:up:s3`/`compose:down`/`compose:logs` added alongside the existing validate/dev/migrate scripts |
 | **P-TOOL-6** | Follow SETUP.md as a stranger; fix what fails | P1 | Not started |
 | **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | ✅ Done — and guarded by `test/env-example.test.ts`, which fails in both directions |
 | **P-TOOL-8** | CI required checks documented in README | P2 | ✅ Done — with S-12 |
