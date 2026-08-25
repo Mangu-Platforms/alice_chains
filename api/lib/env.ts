@@ -53,6 +53,11 @@ const envSchema = z.object({
   // Whether X-Forwarded-For may be believed. Off by default: a client can set
   // that header freely, so trusting it without a proxy in front lets anyone
   // choose their own rate-limit bucket.
+  // Comma-separated origins allowed to reach the API and open a socket.
+  // Empty means "the app's own origin only", which is right for the
+  // single-origin deployment this ships as.
+  CORS_ORIGINS: z.string().default(""),
+
   TRUST_PROXY: z
     .enum(["true", "false"])
     .default("false")
@@ -156,4 +161,22 @@ export function getPort() {
 
 export function getOwnerUnionId() {
   return env.OWNER_UNION_ID;
+}
+
+/**
+ * Origins allowed to call the API and open a socket (S-15, SEC-C-18).
+ *
+ * Socket.IO's CORS was hard-coded to `http://localhost:3000` in development
+ * and `false` in production, which is correct only for a deployment served from
+ * exactly one origin and says so nowhere. This makes it configuration.
+ */
+export function allowedOrigins(): string[] {
+  const configured = env.CORS_ORIGINS.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (configured.length > 0) return configured;
+  if (env.PUBLIC_BASE_URL) return [env.PUBLIC_BASE_URL];
+  // Development default: Vite serves the client here and proxies to the API.
+  return isProduction ? [] : ["http://localhost:3000"];
 }

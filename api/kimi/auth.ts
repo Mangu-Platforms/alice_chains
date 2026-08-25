@@ -2,6 +2,7 @@ import { getSessionToken, startSession, verifySessionToken } from "./session";
 import { findUserByUnionId, upsertUser } from "../queries/users";
 import { createOAuthAttempt, safeEqual } from "./pkce";
 import { env } from "../lib/env";
+import { log } from "../lib/logger";
 import {
   clearOAuthCookie,
   readCookie,
@@ -71,7 +72,7 @@ export function createOAuthLoginHandler() {
     } catch (error) {
       // A misconfigured origin is an operator error, not a user error. Say so
       // plainly in the log and give the browser nothing to act on.
-      console.error("OAuth configuration is invalid:", error);
+      log.error("OAuth configuration is invalid", { error });
       return c.json({ error: "OAuth is not configured correctly" }, 500);
     }
 
@@ -142,7 +143,7 @@ export function createOAuthCallbackHandler() {
       endpoints = oauthEndpoints(env.VITE_KIMI_AUTH_URL);
       redirectUri = oauthRedirectUri(publicBaseUrl(url));
     } catch (error) {
-      console.error("OAuth configuration is invalid:", error);
+      log.error("OAuth configuration is invalid", { error });
       return fail("OAuth is not configured correctly", 500);
     }
 
@@ -213,7 +214,7 @@ export function createOAuthCallbackHandler() {
 
       return new Response(null, { status: 302, headers: responseHeaders });
     } catch (error) {
-      console.error("OAuth callback error:", error);
+      log.error("OAuth callback failed", { error });
       return fail("Authentication failed", 500);
     }
   };

@@ -6,6 +6,7 @@
  * and a notification for a message they are looking at is noise.
  */
 import { getOnlineUsers } from "../../socket";
+import { log } from "../logger";
 import { participantIds } from "../realtime";
 import { blockedWith } from "../authz";
 import { sendToUsers, pushIsConfigured } from "./send";
@@ -62,7 +63,7 @@ export async function notifyNewMessage(input: MessageNotification): Promise<void
       tag: `conversation-${input.conversationId}`,
     });
   } catch (error) {
-    console.error("Push notification failed:", error);
+    log.error("push notification failed", { conversationId: input.conversationId, error });
   }
 }
 

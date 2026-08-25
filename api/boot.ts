@@ -6,7 +6,12 @@ import type { Server as HttpServer } from "http";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
-import { env } from "./lib/env";
+import { secureHeaders } from "hono/secure-headers";
+import { sql } from "drizzle-orm";
+import { env, isProduction } from "./lib/env";
+import { log, requestId } from "./lib/logger";
+import { increment, observe, render } from "./lib/metrics";
+import { getDb } from "./queries/connection";
 import { clearSessionCookie, parseSessionToken } from "./lib/cookies";
 import { decodeSessionToken, revokeSession } from "./kimi/session";
 import { createOAuthCallbackHandler, createOAuthLoginHandler } from "./kimi/auth";
@@ -25,6 +30,119 @@ import { MAX_JSON_BODY_BYTES } from "@contracts/constants";
 import { API_PORT, DEFAULT_PROD_PORT } from "@contracts/constants";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
+
+/**
+ * S-15 · security headers on every response.
+ *
+ * The app shipped none. `frameAncestors: none` is what stops it being framed
+ * for clickjacking; `nosniff` stops an attachment being re-interpreted as
+ * something executable; and the referrer policy stops a conversation id
+ * leaking to every link a member follows out of a message.
+ *
+ * The CSP allows inline styles because Tailwind emits them, but no inline
+ * script — the bundle is the only script that runs. `connect-src` includes
+ * ws/wss for the socket.
+ */
+app.use(
+  "*",
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+    // Only meaningful over TLS, and actively harmful on a plain-http
+    // development host, where a browser would refuse to reach it again.
+    strictTransportSecurity: isProduction
+      ? "max-age=31536000; includeSubDomains"
+      : false,
+    xContentTypeOptions: "nosniff",
+    xFrameOptions: "DENY",
+    referrerPolicy: "strict-origin-when-cross-origin",
+    crossOriginOpenerPolicy: "same-origin",
+    xDnsPrefetchControl: false,
+    xDownloadOptions: false,
+    xPermittedCrossDomainPolicies: false,
+  })
+);
+
+/**
+ * S-15 / P-TOOL-4 · a request id and one structured line per request.
+ *
+ * The id is taken from the inbound `x-request-id` when a proxy set one, so a
+ * trace spans the whole hop, and echoed back so a member can quote it in a bug
+ * report. Method, path, status and duration are recorded; nothing from the
+ * body or the query string is, because those carry message content.
+ */
+app.use("*", async (c, next) => {
+  const id = requestId(c.req.raw.headers);
+  const started = performance.now();
+
+  await next();
+
+  const durationMs = performance.now() - started;
+  // The route pattern, not the URL: `/api/trpc/message.send` is a useful
+  // metric label, whereas a path with ids in it is unbounded cardinality.
+  const route = c.req.routePath ?? "unmatched";
+
+  increment("http_requests_total", {
+    method: c.req.method,
+    route,
+    status: String(c.res.status),
+  });
+  observe("http_request_duration_seconds", durationMs, { method: c.req.method, route });
+
+  c.res.headers.set("x-request-id", id);
+
+  log[c.res.status >= 500 ? "error" : "info"]("request", {
+    requestId: id,
+    method: c.req.method,
+    route,
+    status: c.res.status,
+    durationMs: Math.round(durationMs),
+  });
+});
+
+/**
+ * S-15 / P-TOOL-3 · liveness. Answers if the process is running, and asks
+ * nothing else — a liveness probe that depends on the database restarts the
+ * app during a database outage, which helps nobody.
+ */
+app.get("/healthz", (c) => c.json({ status: "ok", uptimeSeconds: Math.round(process.uptime()) }));
+
+/**
+ * Readiness. Touches MySQL, because "ready" means ready to serve requests and
+ * every request this app answers needs the database. A load balancer should
+ * take this instance out of rotation when it cannot.
+ */
+app.get("/readyz", async (c) => {
+  const started = performance.now();
+  try {
+    await getDb().execute(sql`SELECT 1`);
+    return c.json({
+      status: "ready",
+      database: { ok: true, latencyMs: Math.round(performance.now() - started) },
+    });
+  } catch (error) {
+    log.error("readiness check failed", { error });
+    return c.json({ status: "not_ready", database: { ok: false } }, 503);
+  }
+});
+
+/**
+ * Metrics, in Prometheus text format. Not exposed publicly in a real
+ * deployment — bind it to an internal interface or put it behind the proxy.
+ */
+app.get("/metrics", (c) =>
+  c.text(render(), 200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" })
+);
 
 // SEC-C-20. Was 50 MB, which let any request buffer 50 MB of memory before a
 // single handler ran. No JSON endpoint this app serves needs more than a few
@@ -191,11 +309,13 @@ if (env.NODE_ENV !== "test") {
   // IncomingMessage directly into app.fetch() as if it were a fetch Request,
   // which is not a valid conversion.
   const server = serve({ fetch: app.fetch, port }, (info) => {
-    const what = isProd ? "Alice Chains" : "Alice Chains API";
-    console.log(`${what} listening on http://localhost:${info.port}/`);
-    if (!isProd) {
-      console.log("Client dev server: http://localhost:3000/ (vite)");
-    }
+    log.info("listening", {
+      port: info.port,
+      mode: isProd ? "production" : "development",
+      storageDriver: env.STORAGE_DRIVER,
+      pushEnabled: Boolean(env.VAPID_PUBLIC_KEY),
+      clientDevServer: isProd ? undefined : "http://localhost:3000/",
+    });
   });
 
   initSocket(server as unknown as HttpServer);

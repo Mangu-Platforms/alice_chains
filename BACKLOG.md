@@ -64,7 +64,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-6** | Docker stack — `docker compose up` from a clean checkout, image < 400 MB | P1 | — | ✅ Built; awaiting a live `docker compose up` verification run |
 | **S-13** | Rate limiting per [SECURITY.md §8](docs/SECURITY.md) — login/callback, message send (socket *and* tRPC), contact requests, search, upload | P1 | S-7 | ✅ Done |
 | **S-14** | Runtime validation of socket payloads with shared Zod schemas in `contracts/`; enforce the 4000-char cap on the socket path | P1 | S-7 | ✅ Done |
-| **S-15** | Observability per [TECH_SPEC.md §10](docs/TECH_SPEC.md) — structured logs with redaction, `/healthz` + `/readyz`, RED metrics | P1 | — | Not started |
+| **S-15** | Observability per [TECH_SPEC.md §10](docs/TECH_SPEC.md) — structured logs with redaction, `/healthz` + `/readyz`, RED metrics | P1 | — | ✅ Done |
 | **S-16** | Client code-splitting plus a CI bundle-size gate (NFR-PERF-06 — the budget is met today at 177.5 KiB gzipped; the gate is what is missing) | P1 | — | Not started |
 | **S-18** | Owner/admin capability and data rights — bind `OWNER_UNION_ID` to `users.role` (`getOwnerUnionId()` has zero call sites today), `adminQuery` builder, member list, deactivation, audit record, data export and erasure, narrowed `auth.me` | P1 | S-3, S-17 | Not started |
 | **S-20** | Accessibility and internationalisation baseline — WCAG 2.2 AA audit and fixes, keyboard operation and focus management in the chat list, `aria-live` announcements, message catalogue and locale-aware timestamps | P1 | — | Not started |
@@ -92,8 +92,8 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 |---|---|---|---|
 | **P-TOOL-1** | `scripts/dev.sh` — compose db, migrate, dev | P1 | Not started |
 | **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | Not started |
-| **P-TOOL-3** | `/healthz` and `/readyz` (readiness touches MySQL) | P1 | Not started — folded into S-15 |
-| **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | Not started — folded into S-15 |
+| **P-TOOL-3** | `/healthz` and `/readyz` (readiness touches MySQL) | P1 | ✅ Done — with S-15 |
+| **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | ✅ Done — with S-15 |
 | **P-TOOL-5** | npm scripts for every operator task | P2 | Not started |
 | **P-TOOL-6** | Follow SETUP.md as a stranger; fix what fails | P1 | Not started |
 | **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | Not started |

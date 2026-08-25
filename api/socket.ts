@@ -8,6 +8,9 @@ import { messageReads, conversationParticipants, conversations, users } from "@d
 import { eq, sql } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
 import { getSessionToken, verifySessionToken } from "./kimi/session";
+import { allowedOrigins } from "./lib/env";
+import { log } from "./lib/logger";
+import { increment } from "./lib/metrics";
 import {
   blockedWith,
   isBlockedInConversation,
@@ -75,7 +78,8 @@ function validated<E extends SocketEventName>(
     try {
       await handler(parsed.data as SocketEventPayload<E>);
     } catch (error) {
-      console.error(`Socket handler "${event}" failed:`, error);
+      log.error("socket handler failed", { event, error });
+      increment("socket_errors_total", { event });
       socket.emit("messageError", { error: "Something went wrong" });
     }
   };
@@ -125,8 +129,10 @@ function announcePresence(
 
 export function initSocket(server: HttpServer) {
   io = new SocketIOServer(server, {
+    // S-15 / SEC-C-18. Was hard-coded to localhost in development and `false`
+    // in production; now an explicit allowlist that a deployment can set.
     cors: {
-      origin: process.env.NODE_ENV === "production" ? false : "http://localhost:3000",
+      origin: allowedOrigins(),
       credentials: true,
     },
     path: "/socket.io",
@@ -176,7 +182,7 @@ export function initSocket(server: HttpServer) {
   sessionRecheckTimer.unref?.();
 
   io.on("connection", (socket: Socket) => {
-    console.log("Socket connected:", socket.id);
+    increment("socket_connections_total");
 
     const userId = socket.data.userId as number;
     const sockets = onlineUsers.get(userId) ?? new Set<string>();
@@ -205,7 +211,7 @@ export function initSocket(server: HttpServer) {
           announcePresence(userId, related, "userOnline");
         }
       } catch (error) {
-        console.error("Error scoping presence:", error);
+        log.error("failed to scope presence", { userId, error });
       }
     })();
 
@@ -438,9 +444,9 @@ export function initSocket(server: HttpServer) {
         // formed during the session is honoured on the way out.
         void relatedUserIds(userId)
           .then((related) => announcePresence(userId, related, "userOffline"))
-          .catch((error) => console.error("Error scoping presence:", error));
+          .catch((error) => log.error("failed to scope presence", { userId, error }));
       }
-      console.log("Socket disconnected:", socket.id);
+      increment("socket_disconnections_total");
     });
   });
 
