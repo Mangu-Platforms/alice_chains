@@ -14,7 +14,7 @@
  *   - `assert*` throw a `TRPCError`. Use them inside tRPC procedures.
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { contacts, conversationParticipants, messages, users } from "@db/schema";
 import { alias } from "drizzle-orm/mysql-core";
 
@@ -240,14 +240,12 @@ export async function blockedAgainst(
 export async function assertNotBlocked(
   userId: number,
   otherIds: number[],
-  db: Db = getDb()
+  db: Db = getDb(),
+  message = "You cannot start a conversation with one of these people"
 ): Promise<void> {
   const blocked = await blockedAgainst(userId, otherIds, db);
   if (blocked.size > 0) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "You cannot start a conversation with one of these people",
-    });
+    throw new TRPCError({ code: "FORBIDDEN", message });
   }
 }
 
@@ -260,8 +258,7 @@ export async function assertNotBlocked(
  * Presence used to be `socket.broadcast.emit`, so every signed-in member
  * learned every other member's online state and each new socket received the
  * whole online-user list (BUILD_PLAN S-10). This set is the audience instead.
- * Suppressing presence *between blocked pairs* is F-8; a blocked pair is still
- * "related" as far as this predicate is concerned.
+ * Blocked pairs are subtracted (F-8), so neither party sees the other.
  */
 export async function relatedUserIds(
   userId: number,
@@ -294,5 +291,92 @@ export async function relatedUserIds(
   for (const row of coMemberRows) related.add(row.userId);
   related.delete(userId);
 
+  // F-8. A blocked pair may well still share a conversation, so they stay
+  // "related" by the definition above — but neither should learn the other's
+  // presence. Subtracting here covers every caller at once.
+  for (const blocked of await blockedWith(userId, db)) related.delete(blocked);
+
   return related;
+}
+
+/**
+ * True when any *other* member of `conversationId` has blocked `userId`.
+ *
+ * Directional on purpose. FR-MSG-19 constrains the blocked party only: "a
+ * member MUST NOT be able to send to a conversation containing a member who has
+ * blocked them". Making it symmetric would silence the *blocker* as well —
+ * so blocking one person in a twenty-member group would mute you in that group
+ * entirely, which is nobody's intent. Conversation *creation* stays symmetric
+ * (S-9), because starting a new chat needs both parties willing.
+ *
+ * It is still strict in the direction it covers: a blocked member cannot reach
+ * the blocker through any shared conversation, not merely through a direct
+ * chat, or blocking would be trivially defeated by finding a common group.
+ *
+ * One joined query rather than "list the members, then check each": send is the
+ * hottest write path in the app.
+ */
+export async function isBlockedInConversation(
+  userId: number,
+  conversationId: number,
+  db: Db = getDb()
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: contacts.id })
+    .from(conversationParticipants)
+    .innerJoin(
+      contacts,
+      and(
+        eq(contacts.status, "blocked"),
+        // The other member is the blocker; `userId` is the blocked party.
+        eq(contacts.userId, conversationParticipants.userId),
+        eq(contacts.contactUserId, userId)
+      )
+    )
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, conversationId),
+        ne(conversationParticipants.userId, userId)
+      )
+    )
+    .limit(1);
+
+  return Boolean(row);
+}
+
+/** Throws `FORBIDDEN` when `isBlockedInConversation` holds. */
+export async function assertNotBlockedInConversation(
+  userId: number,
+  conversationId: number,
+  db: Db = getDb()
+): Promise<void> {
+  if (await isBlockedInConversation(userId, conversationId, db)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You cannot send messages to this conversation",
+    });
+  }
+}
+
+/**
+ * Everyone `userId` is in a blocked relationship with, either direction.
+ *
+ * Used to subtract from a fan-out audience rather than to gate one call, so it
+ * returns the whole set in one query.
+ */
+export async function blockedWith(
+  userId: number,
+  db: Db = getDb()
+): Promise<Set<number>> {
+  const rows = await db
+    .select({ userId: contacts.userId, contactUserId: contacts.contactUserId })
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.status, "blocked"),
+        or(eq(contacts.userId, userId), eq(contacts.contactUserId, userId))
+      )
+    );
+
+  return new Set(rows.map((r) => (r.userId === userId ? r.contactUserId : r.userId)));
 }

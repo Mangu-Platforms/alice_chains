@@ -241,6 +241,10 @@ describeIntegration("schema constraints (S-3)", () => {
     expect(rows.every((r) => r.status === "accepted")).toBe(true);
   });
 
+  // Originally this asserted that re-adding a blocked contact was a harmless
+  // no-op that left the status alone. F-8 made it stronger: the attempt is
+  // refused outright. The invariant being protected — a block never weakens by
+  // re-adding — still holds, and now cannot even be attempted.
   it("does not un-block someone by re-adding them", async () => {
     const alice = await createUser();
     const bob = await createUser();
@@ -248,7 +252,9 @@ describeIntegration("schema constraints (S-3)", () => {
       .insert(contacts)
       .values({ userId: alice.id, contactUserId: bob.id, status: "blocked" });
 
-    await caller(alice).contact.add({ contactUserId: bob.id });
+    await expect(
+      caller(alice).contact.add({ contactUserId: bob.id })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     const [row] = await getDb()
       .select()

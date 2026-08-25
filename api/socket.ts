@@ -7,7 +7,13 @@ import { messageReads, conversationParticipants } from "@db/schema";
 import { eq, sql } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
 import { getSessionToken, verifySessionToken } from "./kimi/session";
-import { isParticipant, messagesBelongToConversation, relatedUserIds } from "./lib/authz";
+import {
+  blockedWith,
+  isBlockedInConversation,
+  isParticipant,
+  messagesBelongToConversation,
+  relatedUserIds,
+} from "./lib/authz";
 import { MAX_READ_RECEIPT_BATCH, SOCKET_SESSION_RECHECK_MS } from "@contracts/constants";
 
 let io: SocketIOServer | null = null;
@@ -160,6 +166,16 @@ export function initSocket(server: HttpServer) {
 
           const db = getDb();
 
+          // F-8 / FR-MSG-19, on the door the UI actually uses. The socket has
+          // no error channel, so the sender is told rather than ignored.
+          if (await isBlockedInConversation(userId, data.conversationId)) {
+            socket.emit("messageError", {
+              error: "You cannot send messages to this conversation",
+              tempId: data.tempId,
+            });
+            return;
+          }
+
           // Same helper as the tRPC path: insert and bump the conversation's
           // updatedAt in one transaction (S-11).
           // FR-MSG-15 is enforced inside `insertMessage`, so both doors get
@@ -264,12 +280,31 @@ export function initSocket(server: HttpServer) {
     socket.on(
       "typing",
       async (data: { conversationId: number; isTyping: boolean }) => {
+        if (!Number.isInteger(data?.conversationId)) return;
         if (!(await isMember(data.conversationId))) return;
-        socket.to(`conv_${data.conversationId}`).emit("userTyping", {
-          userId: socket.data.userId,
+
+        // F-8. Emitting to the conversation room would reach a member who has
+        // blocked the typist, and a room cannot exclude one recipient. Fanning
+        // out per member makes the audience the authorization — the same shape
+        // presence uses.
+        const [members, blocked] = await Promise.all([
+          getDb()
+            .select({ userId: conversationParticipants.userId })
+            .from(conversationParticipants)
+            .where(eq(conversationParticipants.conversationId, data.conversationId)),
+          blockedWith(userId),
+        ]);
+
+        const payload = {
+          userId,
           conversationId: data.conversationId,
-          isTyping: data.isTyping,
-        });
+          isTyping: Boolean(data.isTyping),
+        };
+
+        for (const member of members) {
+          if (member.userId === userId || blocked.has(member.userId)) continue;
+          io?.to(`user_${member.userId}`).emit("userTyping", payload);
+        }
       }
     );
 

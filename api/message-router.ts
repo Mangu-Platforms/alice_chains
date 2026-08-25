@@ -5,7 +5,12 @@ import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
 import { TRPCError } from "@trpc/server";
-import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
+import {
+  assertMessagesReadable,
+  assertNotBlockedInConversation,
+  assertParticipant,
+  isParticipant,
+} from "./lib/authz";
 import { emitToConversation, emitToMembers } from "./lib/realtime";
 import { messages, messageReactions, messageReads, users } from "@db/schema";
 import { MAX_MESSAGE_LENGTH, MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
@@ -211,6 +216,9 @@ export const messageRouter = createRouter({
       const userId = ctx.user.id;
 
       await assertParticipant(userId, input.conversationId, db);
+      // F-8 / FR-MSG-19. Membership is not enough: a member who has been
+      // blocked by anyone else in the conversation cannot send into it.
+      await assertNotBlockedInConversation(userId, input.conversationId, db);
 
       // Shared with the socket path so `conversations.updatedAt` is touched
       // whichever door the message came through (S-11).

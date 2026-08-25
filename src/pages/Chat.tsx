@@ -114,6 +114,27 @@ export default function Chat() {
 
   // F-3. The server decides add-vs-remove from what is stored, so the client
   // sends only the emoji and re-renders from the summary that comes back.
+  const { data: blockedContacts, refetch: refetchBlocked } =
+    trpc.contact.blocked.useQuery();
+
+  const blockUser = trpc.contact.block.useMutation({
+    onSuccess: () => {
+      toast.success("Blocked. They can no longer message you.");
+      refetchBlocked();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const unblockUser = trpc.contact.unblock.useMutation({
+    onSuccess: () => {
+      toast.success("Unblocked.");
+      refetchBlocked();
+      refetchConversations();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const react = trpc.message.react.useMutation({
     onSuccess: () => refetchMessages(),
     onError: (error) => toast.error(error.message),
@@ -316,6 +337,17 @@ export default function Chat() {
   );
 
   const isUserOnline = (userId: number) => onlineUsers.has(userId);
+
+  // F-8. Blocking is a person-to-person act, so it is only offered on a direct
+  // conversation — there is no single "other member" of a group to block.
+  const otherMemberId =
+    activeConversation?.type === "direct"
+      ? (activeConversation.participants.find((p) => p.userId !== user?.id)?.userId ??
+        null)
+      : null;
+  const isOtherMemberBlocked =
+    otherMemberId !== null &&
+    (blockedContacts ?? []).some((b) => b.contactUserId === otherMemberId);
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
@@ -553,10 +585,39 @@ export default function Chat() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem>View Profile</DropdownMenuItem>
-                    <DropdownMenuItem>Mute Notifications</DropdownMenuItem>
-                    <DropdownMenuItem className="text-destructive">
-                      Block User
+                    {/*
+                      F-8. "Block User" now blocks. "View Profile" and "Mute
+                      Notifications" were stubs that did nothing when clicked;
+                      they are gone until the tasks that own them ship, because
+                      a control that lies is worse than one that is absent.
+                    */}
+                    {otherMemberId !== null &&
+                      (isOtherMemberBlocked ? (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            unblockUser.mutate({ contactUserId: otherMemberId })
+                          }
+                          disabled={unblockUser.isPending}
+                        >
+                          {unblockUser.isPending ? "Unblocking…" : "Unblock"}
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          className="text-destructive"
+                          onClick={() =>
+                            blockUser.mutate({ contactUserId: otherMemberId })
+                          }
+                          disabled={blockUser.isPending}
+                        >
+                          {blockUser.isPending ? "Blocking…" : "Block user"}
+                        </DropdownMenuItem>
+                      ))}
+                    <DropdownMenuItem
+                      onClick={() => navigate("/contacts")}
+                      className="gap-2"
+                    >
+                      <Users className="w-4 h-4" />
+                      Manage contacts
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
