@@ -161,7 +161,7 @@ What remains is scheduled in [BACKLOG.md](BACKLOG.md): Wave 4 features (unreads 
 
 ## Contributing
 
-`npm run validate` must be green. One task, one commit, one PR. Tests accompany behavioural changes. See [CLAUDE.md](CLAUDE.md) for the full working agreement.
+`npm run validate` must be green. One task, one commit, one PR. Tests accompany behavioural changes. [CONTRIBUTING.md](CONTRIBUTING.md) is the entry point for a human contributor; [CLAUDE.md](CLAUDE.md) is the full working agreement, written for agentic contributions but binding on everyone.
 
 ## License
 
