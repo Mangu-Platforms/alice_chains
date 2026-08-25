@@ -55,6 +55,12 @@ import { Linkify } from "@/lib/linkify";
 import { ConnectionBanner } from "@/components/ConnectionBanner";
 import { Outbox, type OutboxEntry } from "@/lib/outbox";
 import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
+import { EmojiPicker } from "@/components/EmojiPicker";
+import {
+  counterState,
+  filesFromClipboard,
+  insertAtCaret,
+} from "@/lib/composer";
 import { REACTION_EMOJI } from "@contracts/reactions";
 import {
   ALLOWED_MIME_TYPES,
@@ -62,6 +68,9 @@ import {
   formatBytes,
   isAllowedMimeType,
 } from "@contracts/attachments";
+
+/** Matches `max-h-[120px]` on the composer; the two must agree. */
+const COMPOSER_MAX_HEIGHT = 120;
 
 export default function Chat() {
   const { user, logout } = useAuth();
@@ -164,6 +173,7 @@ export default function Chat() {
   // three-step upload the server expects: ask for a target, PUT the bytes
   // straight to storage, then send a message naming the attachment.
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [uploading, setUploading] = useState(false);
 
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -217,7 +227,7 @@ export default function Chat() {
   });
 
   const handleFilesSelected = useCallback(
-    async (files: FileList | null) => {
+    async (files: ArrayLike<File> | null) => {
       if (!files?.length || !activeConversationId) return;
       const file = files[0];
 
@@ -506,6 +516,14 @@ export default function Chat() {
     const content = messageInput.trim();
     if (!content || !activeConversationId) return;
 
+    // P-UX-3. The cap belongs to the server, but sending something it will
+    // certainly reject only to surface the rejection as a failed send is a
+    // worse answer than declining here, next to the counter that says why.
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      toast.error(t("composer.tooLong", MAX_MESSAGE_LENGTH));
+      return;
+    }
+
     // P-UX-2. Everything goes through the outbox, connected or not — so the
     // send path is one path, and "sent" always means "the server echoed the
     // tempId back". Previously an emit into a dead socket looked identical to
@@ -570,6 +588,55 @@ export default function Chat() {
     },
     [activeConversationId, socket]
   );
+
+  // ── P-UX-3 · the composer ───────────────────────────────────────────────
+  // The cap was enforced only by the server, so the first a member heard of it
+  // was a rejection after they had finished writing.
+  const counter = counterState(messageInput.length);
+
+  /** Insert an emoji where the caret is, then put the caret after it. */
+  const insertEmoji = useCallback((emoji: string) => {
+    const field = composerRef.current;
+    const next = insertAtCaret(
+      messageInput,
+      field?.selectionStart ?? null,
+      field?.selectionEnd ?? null,
+      emoji
+    );
+
+    setMessageInput(next.value);
+
+    // Focus returns to the message, not the picker's trigger — otherwise
+    // inserting two emoji in a row means reaching for the mouse between them.
+    requestAnimationFrame(() => {
+      field?.focus();
+      field?.setSelectionRange(next.caret, next.caret);
+    });
+  }, [messageInput]);
+
+  /**
+   * A pasted image goes straight into F-4's upload path. A paste with no files
+   * is left entirely alone, so pasting text still behaves like pasting text.
+   */
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = filesFromClipboard(event.clipboardData);
+      if (files.length === 0) return;
+
+      event.preventDefault();
+      void handleFilesSelected(files);
+    },
+    [handleFilesSelected]
+  );
+
+  // Shift+Enter inserts a newline; a fixed-height box hides it. Grow to fit,
+  // up to the same ceiling the stylesheet sets, then let it scroll.
+  useEffect(() => {
+    const field = composerRef.current;
+    if (!field) return;
+    field.style.height = "auto";
+    field.style.height = `${Math.min(field.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }, [messageInput]);
 
   const selectConversation = (id: number) => {
     setSearchParams({ c: id.toString() });
@@ -1657,10 +1724,14 @@ export default function Chat() {
                     <Paperclip className="w-5 h-5 text-muted-foreground" />
                   )}
                 </Button>
+                <EmojiPicker onSelect={insertEmoji} />
                 <div className="flex-1 relative">
                   <textarea
+                    ref={composerRef}
                     value={messageInput}
                     onChange={(e) => handleTyping(e.target.value)}
+                    onPaste={handlePaste}
+                    aria-describedby={counter.visible ? "composer-counter" : undefined}
                     onKeyDown={(e) => {
                       // Escape drops the reply target before it reaches the
                       // send handler, so the key does something useful whether
@@ -1687,7 +1758,7 @@ export default function Chat() {
                 </div>
                 <Button
                   onClick={handleSendMessage}
-                  disabled={!messageInput.trim()}
+                  disabled={!messageInput.trim() || counter.over}
                   aria-label={t("a11y.sendMessage")}
                   size="icon"
                   className="flex-shrink-0 rounded-xl h-11 w-11"
@@ -1695,6 +1766,29 @@ export default function Chat() {
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
+              {counter.visible && (
+                <div className="max-w-4xl mx-auto mt-1 flex justify-end">
+                  <span
+                    id="composer-counter"
+                    className={`text-[11px] tabular-nums ${
+                      counter.over ? "text-destructive" : "text-muted-foreground"
+                    }`}
+                  >
+                    {counter.over
+                      ? t("composer.over", -counter.remaining)
+                      : t("composer.remaining", counter.remaining)}
+                  </span>
+                  {counter.over ? (
+                    <span className="sr-only" role="alert">
+                      {t("composer.overLimit")}
+                    </span>
+                  ) : (
+                    <span className="sr-only" role="status">
+                      {t("composer.nearLimit")}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </>
         ) : (

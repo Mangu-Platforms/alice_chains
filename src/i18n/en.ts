@@ -85,6 +85,20 @@ export const en = {
   "empty.pickAConversationHint": "Or start a new one from your contacts.",
   "action.addContact": "Add a contact",
   "action.clearSearch": "Clear search",
+
+  // ── The composer (P-UX-3) ─────────────────────────────────────────────
+  // The two announcements are deliberately fixed strings rather than the
+  // live number: a live region carrying "1 973 characters left" re-announces
+  // on every keystroke, which is worse than not announcing at all.
+  "a11y.insertEmoji": "Insert an emoji",
+  "composer.nearLimit": "Approaching the message length limit.",
+  "composer.overLimit": "This message is too long to send. Shorten it.",
+  "composer.remaining": (n: number) =>
+    n === 1 ? "1 character left" : `${n} characters left`,
+  "composer.over": (n: number) =>
+    n === 1 ? "1 character over the limit" : `${n} characters over the limit`,
+  "composer.tooLong": (max: number) =>
+    `Messages can be at most ${max} characters.`,
 } as const;
 
 export type MessageKey = keyof typeof en;
