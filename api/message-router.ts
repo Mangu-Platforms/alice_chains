@@ -1,13 +1,10 @@
 import { z } from "zod";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import {
-  messages,
-  messageReads,
-  conversationParticipants,
-  users,
-} from "@db/schema";
+import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
+import { messages, messageReads, users } from "@db/schema";
+import { MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
 
 export const messageRouter = createRouter({
   listByConversation: authedQuery
@@ -22,19 +19,9 @@ export const messageRouter = createRouter({
       const db = getDb();
       const userId = ctx.user.id;
 
-      // Verify user is participant
-      const [participant] = await db
-        .select()
-        .from(conversationParticipants)
-        .where(
-          and(
-            eq(conversationParticipants.conversationId, input.conversationId),
-            eq(conversationParticipants.userId, userId)
-          )
-        )
-        .limit(1);
-
-      if (!participant) return [];
+      // A non-participant sees an empty page rather than an error: the caller
+      // has no right to learn whether the conversation exists.
+      if (!(await isParticipant(userId, input.conversationId, db))) return [];
 
       const msgs = await db
         .select({
@@ -96,21 +83,7 @@ export const messageRouter = createRouter({
       const db = getDb();
       const userId = ctx.user.id;
 
-      // Verify user is participant
-      const [participant] = await db
-        .select()
-        .from(conversationParticipants)
-        .where(
-          and(
-            eq(conversationParticipants.conversationId, input.conversationId),
-            eq(conversationParticipants.userId, userId)
-          )
-        )
-        .limit(1);
-
-      if (!participant) {
-        throw new Error("You are not a participant in this conversation");
-      }
+      await assertParticipant(userId, input.conversationId, db);
 
       const [result] = await db.insert(messages).values({
         conversationId: input.conversationId,
@@ -133,15 +106,27 @@ export const messageRouter = createRouter({
     }),
 
   markAsRead: authedQuery
-    .input(z.object({ messageIds: z.array(z.number()) }))
+    .input(
+      z.object({
+        messageIds: z.array(z.number().int().positive()).max(MAX_READ_RECEIPT_BATCH),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const userId = ctx.user.id;
 
       if (input.messageIds.length === 0) return { success: true };
 
-      // Insert read receipts, ignoring duplicates
-      for (const messageId of input.messageIds) {
+      // S-8. This procedure previously accepted an arbitrary id list and wrote
+      // a receipt for every one of them with no authorization at all, so any
+      // signed-in caller could mark any message in the deployment as read.
+      // Every id must now live in a conversation the caller belongs to.
+      await assertMessagesReadable(userId, input.messageIds, db);
+
+      // Ids are deduplicated because there is no unique key on
+      // (messageId, userId) yet — S-3 adds it, and S-5 replaces this loop with
+      // a single multi-row insert.
+      for (const messageId of new Set(input.messageIds)) {
         try {
           await db.insert(messageReads).values({
             messageId,

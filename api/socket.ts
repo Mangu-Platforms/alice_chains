@@ -2,8 +2,10 @@ import type { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getDb } from "./queries/connection";
 import { messages, messageReads, conversationParticipants } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
+import { isParticipant, messagesBelongToConversation } from "./lib/authz";
+import { MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
 
 let io: SocketIOServer | null = null;
 
@@ -53,18 +55,13 @@ export function initSocket(server: HttpServer) {
     }
     socket.emit("onlineUsers", Array.from(onlineUsers.keys()));
 
-    const isParticipant = async (conversationId: number) => {
-      const [participant] = await getDb().select({ id: conversationParticipants.id })
-        .from(conversationParticipants).where(and(
-          eq(conversationParticipants.conversationId, conversationId),
-          eq(conversationParticipants.userId, userId),
-        )).limit(1);
-      return Boolean(participant);
-    };
+    // Membership is asked of the shared predicate in api/lib/authz.ts so the
+    // socket and tRPC doors can never drift apart (BUILD_PLAN S-8).
+    const isMember = (conversationId: number) => isParticipant(userId, conversationId);
 
     // Join a conversation room
     socket.on("joinConversation", async ({ conversationId }: { conversationId: number }) => {
-      if (await isParticipant(conversationId)) socket.join(`conv_${conversationId}`);
+      if (await isMember(conversationId)) socket.join(`conv_${conversationId}`);
     });
 
     // Leave a conversation room
@@ -87,21 +84,9 @@ export function initSocket(server: HttpServer) {
           const userId = socket.data.userId;
           if (!userId) return;
 
+          if (!(await isMember(data.conversationId))) return;
+
           const db = getDb();
-
-          // Verify user is participant
-          const [participant] = await db
-            .select()
-            .from(conversationParticipants)
-            .where(
-              and(
-                eq(conversationParticipants.conversationId, data.conversationId),
-                eq(conversationParticipants.userId, userId)
-              )
-            )
-            .limit(1);
-
-          if (!participant) return;
 
           // Insert message
           const [result] = await db.insert(messages).values({
@@ -157,12 +142,29 @@ export function initSocket(server: HttpServer) {
       async (data: { messageIds: number[]; conversationId: number }) => {
         try {
           const userId = socket.data.userId;
-          if (!userId || !data.messageIds.length) return;
-          if (!(await isParticipant(data.conversationId))) return;
+          if (!userId) return;
+
+          // The payload arrives untyped over the wire — the TypeScript
+          // annotation vanishes at compile time (S-14 adds Zod schemas for
+          // every event). Guard the shape before touching it.
+          const requested = Array.isArray(data?.messageIds) ? data.messageIds : [];
+          const messageIds = [
+            ...new Set(requested.filter((id) => Number.isInteger(id) && id > 0)),
+          ];
+          if (!messageIds.length || messageIds.length > MAX_READ_RECEIPT_BATCH) return;
+          if (!Number.isInteger(data?.conversationId)) return;
+
+          if (!(await isMember(data.conversationId))) return;
+
+          // S-8. Membership alone was the whole check here, so a member of one
+          // conversation could write receipts against message ids belonging to
+          // a conversation they are not in. The ids must be in *this*
+          // conversation.
+          if (!(await messagesBelongToConversation(messageIds, data.conversationId))) return;
 
           const db = getDb();
 
-          for (const messageId of data.messageIds) {
+          for (const messageId of messageIds) {
             try {
               await db.insert(messageReads).values({
                 messageId,
@@ -175,7 +177,7 @@ export function initSocket(server: HttpServer) {
 
           // Notify other participants that messages were read
           socket.to(`conv_${data.conversationId}`).emit("messagesRead", {
-            messageIds: data.messageIds,
+            messageIds,
             userId,
           });
         } catch (error) {
@@ -188,7 +190,7 @@ export function initSocket(server: HttpServer) {
     socket.on(
       "typing",
       async (data: { conversationId: number; isTyping: boolean }) => {
-        if (!(await isParticipant(data.conversationId))) return;
+        if (!(await isMember(data.conversationId))) return;
         socket.to(`conv_${data.conversationId}`).emit("userTyping", {
           userId: socket.data.userId,
           conversationId: data.conversationId,

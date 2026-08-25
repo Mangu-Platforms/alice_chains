@@ -17,3 +17,11 @@ export const Session = {
 export const CLIENT_PORT = 3000;
 export const API_PORT = 3001;
 export const DEFAULT_PROD_PORT = 3000;
+
+/**
+ * Largest batch of message ids `message.markAsRead` will accept in one call
+ * (tRPC and Socket.IO alike). A page of history is 100 messages, so this is
+ * generous; the cap exists so a single call cannot ask the server to authorize
+ * an unbounded id list.
+ */
+export const MAX_READ_RECEIPT_BATCH = 500;
