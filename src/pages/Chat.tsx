@@ -64,6 +64,27 @@ export default function Chat() {
       { enabled: !!activeConversationId }
     );
 
+  // F-1. Opening a conversation clears its badge. This writes
+  // `conversation_participants.lastReadAt`, which is what `conversation.list`
+  // counts from — the socket `markAsRead` writes per-message receipts for the
+  // sender's delivery ticks and does not move the read marker.
+  const markConversationRead = trpc.conversation.markAsRead.useMutation({
+    onSuccess: () => refetchConversations(),
+  });
+
+  // Depends on `.mutate`, which is stable across renders, rather than on the
+  // mutation object, which is not — depending on the object would re-run the
+  // effect below on every render and mark the conversation read in a loop.
+  const { mutate: sendMarkRead } = markConversationRead;
+  const markActiveConversationRead = useCallback(() => {
+    if (!activeConversationId) return;
+    sendMarkRead({ conversationId: activeConversationId });
+  }, [activeConversationId, sendMarkRead]);
+
+  useEffect(() => {
+    markActiveConversationRead();
+  }, [markActiveConversationRead]);
+
   // Join socket room for active conversation
   useEffect(() => {
     if (activeConversationId && user) {
@@ -80,15 +101,24 @@ export default function Chat() {
     const cleanup = socket.onNewMessage((message) => {
       if (message.conversationId === activeConversationId) {
         refetchMessages();
-        // Mark as read immediately if we're in the conversation
         if (message.senderId !== user?.id) {
+          // Two writes, two purposes: the receipt drives the sender's read
+          // ticks, the read marker drives our own unread badge.
           socket.markAsRead([message.id], message.conversationId);
+          markActiveConversationRead();
         }
       }
       refetchConversations();
     });
     return cleanup;
-  }, [activeConversationId, socket, refetchMessages, refetchConversations, user]);
+  }, [
+    activeConversationId,
+    socket,
+    refetchMessages,
+    refetchConversations,
+    user,
+    markActiveConversationRead,
+  ]);
 
   // Listen for conversation updates
   useEffect(() => {
@@ -271,25 +301,52 @@ export default function Chat() {
                     )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-sm truncate">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`text-sm truncate ${
+                        conv.unreadCount > 0 ? "font-semibold" : "font-medium"
+                      }`}
+                    >
                       {conv.displayName}
                     </span>
                     {conv.latestMessage && (
-                      <span className="text-[11px] text-muted-foreground flex-shrink-0 ml-2">
+                      <span className="text-[11px] text-muted-foreground flex-shrink-0">
                         {format(new Date(conv.latestMessage.createdAt), "HH:mm")}
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate mt-0.5">
-                    {conv.latestMessage
-                      ? `${
-                          conv.latestMessage.senderId === user?.id
-                            ? "You: "
-                            : ""
-                        }${conv.latestMessage.content}`
-                      : "No messages yet"}
-                  </p>
+                  <div className="flex items-center justify-between gap-2 mt-0.5">
+                    <p
+                      className={`text-xs truncate ${
+                        conv.unreadCount > 0
+                          ? "text-foreground/80"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {conv.latestMessage
+                        ? `${
+                            conv.latestMessage.senderId === user?.id
+                              ? "You: "
+                              : ""
+                          }${conv.latestMessage.content}`
+                        : "No messages yet"}
+                    </p>
+                    {conv.unreadCount > 0 && (
+                      // A bare number means nothing to a screen reader, so the
+                      // visible glyph is hidden from it and the label carries
+                      // the meaning.
+                      <span
+                        className="flex-shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-[11px] font-semibold flex items-center justify-center tabular-nums"
+                        aria-label={`${conv.unreadCount} unread ${
+                          conv.unreadCount === 1 ? "message" : "messages"
+                        }`}
+                      >
+                        <span aria-hidden="true">
+                          {conv.unreadCount > 99 ? "99+" : conv.unreadCount}
+                        </span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               </button>
             ))}

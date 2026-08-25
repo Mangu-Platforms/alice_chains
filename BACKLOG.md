@@ -48,7 +48,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
-| **F-1** | Unread message badges | P1 | S-3, S-11 | Not started |
+| **F-1** | Unread message badges | P1 | S-3, S-11 | ✅ Done |
 | **F-2** | Message editing & soft deletion | P1 | S-3 | Not started |
 | **F-3** | Emoji reactions | P1 | S-3 | Not started |
 | **F-4** | File & image attachments (MinIO locally; no account needed) | P1 | S-3, S-6 | Not started |
