@@ -41,7 +41,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
-| **S-7** | Integration and socket test harness — MySQL service container, fixture factories, ≥ 25 meaningful assertions | P0 | S-3 | Not started |
+| **S-7** | Integration and socket test harness — MySQL service container, fixture factories, ≥ 25 meaningful assertions | P0 | S-3 | ✅ Done — 169 assertions, green on 3 consecutive runs |
 | **S-12** | CI: integration services, migrations before the suite, coverage published, `validate` a required check on `main` | P0 | S-7 | Not started |
 
 ## Wave 4 — Phase 2 features
@@ -79,6 +79,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **H-3** | Give `.prettierignore` real contents; drop the stale `copilot/*` branches | Not started |
 | **H-4** | Remove the orphan `tsconfig.app.json` / `tsconfig.server.json` | Not started |
 | **H-5** | Reconcile the "JWT" wording in `README.md` and `info.md` — sessions are HMAC-signed cookies | Not started |
+| **H-8** | `conversation_participants.lastReadAt` and `messages.createdAt` are `TIMESTAMP` without fractional seconds, and MySQL *rounds* rather than truncates. A message sent in the same second as a read is therefore counted as already read, and two writes 1.1 s apart can share a stored second. Found while stabilising the S-11 suite. Consider `TIMESTAMP(3)` for both, in one migration | Not started |
 | **H-7** | `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` are read on the server only — since S-4 the client builds no provider URL — so the `VITE_` prefix is now misleading. Rename to `KIMI_AUTH_URL`/`KIMI_APP_ID` keeping backwards compatibility, alongside the `JWT_SECRET` → `SESSION_SECRET` rename ([ADR-002](docs/ADR.md)) | Not started |
 | **H-6** | `.env.example` ships `NODE_ENV=development`, so a `cp .env.example .env` followed by `npm run build` emits a **development** React bundle — 839 KB instead of 597 KB, with dev warnings shipped to users. Found while verifying S-8. Make `npm run build` force `NODE_ENV=production` | Not started |
 

@@ -28,9 +28,21 @@ async function updatedAtOf(conversationId: number) {
   return row.updatedAt;
 }
 
-/** MySQL TIMESTAMP has second resolution, so ordering needs distinct seconds. */
+/**
+ * Wait until the wall clock is unambiguously in a later second.
+ *
+ * MySQL TIMESTAMP without fractional seconds has one-second resolution AND
+ * rounds rather than truncating, so a value written at T.6 lands on T+1 while a
+ * `now()` default written at T+1.4 also lands on T+1. Sleeping a flat 1.1 s is
+ * therefore not enough — two writes 1.1 s apart can still share a stored
+ * second, which made this suite flaky. Crossing two boundaries is
+ * unambiguous in either direction.
+ */
 async function tick() {
-  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const startSecond = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) <= startSecond + 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 describeIntegration("conversation recency and unread counts (S-11)", () => {
