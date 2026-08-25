@@ -683,12 +683,40 @@ export default function Chat() {
             ))}
 
             {filteredConversations?.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground">
+              <div className="text-center py-12 px-4 text-muted-foreground">
                 <MessageCircle className="w-12 h-12 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No conversations yet</p>
-                <p className="text-xs mt-1">
-                  Start a chat from your contacts
-                </p>
+                {searchQuery ? (
+                  <>
+                    <p className="text-sm font-medium">
+                      {t("empty.noConversationMatches", searchQuery)}
+                    </p>
+                    <p className="text-xs mt-1">
+                      {t("empty.noConversationMatchesHint")}
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => setSearchQuery("")}
+                    >
+                      {t("action.clearSearch")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium">{t("empty.noConversations")}</p>
+                    <p className="text-xs mt-1">{t("empty.noConversationsHint")}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 gap-2"
+                      onClick={() => navigate("/contacts")}
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      {t("action.addContact")}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </div>

@@ -80,7 +80,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **P-SEARCH-2** | Global search, scoped to the caller's conversations | P1 | P-SEARCH-1 | ✅ Done |
 | **P-PROF-1** | Profile settings — display name, status, avatar, sign out everywhere | P1 | F-4, S-17 | ✅ Done |
 | **P-PROF-2** | Persist the sidebar's collapsed state | P2 | — | ✅ Done |
-| **P-UX-1** | Wire or remove every remaining stub; real empty states | P1 | — | Not started |
+| **P-UX-1** | Wire or remove every remaining stub; real empty states | P1 | — | ✅ Done |
 | **P-UX-2** | Connection banner and an outbox for sends attempted while disconnected | P1 | — | Not started |
 | **P-UX-3** | Composer — shift+enter, character counter, emoji picker, paste-to-attach | P1 | F-4 | Not started |
 | **P-UX-4** | Thread search and media drawer | P2 | F-4, P-SEARCH-1 | Not started |

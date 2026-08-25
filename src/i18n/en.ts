@@ -73,6 +73,18 @@ export const en = {
   "status.messageDeleted": "Message deleted",
   "status.edited": "edited",
   "status.noMessagesYet": "No messages yet",
+
+  // ── Empty states ──────────────────────────────────────────────────────
+  // Each says what to do next. "No conversations yet" alone tells a new
+  // member that something is missing without telling them how to fix it.
+  "empty.noConversations": "No conversations yet",
+  "empty.noConversationsHint": "Add a contact, then start a conversation with them.",
+  "empty.noConversationMatches": (query: string) => `Nothing matches "${query}"`,
+  "empty.noConversationMatchesHint": "Try a different name.",
+  "empty.pickAConversation": "Choose a conversation",
+  "empty.pickAConversationHint": "Or start a new one from your contacts.",
+  "action.addContact": "Add a contact",
+  "action.clearSearch": "Clear search",
 } as const;
 
 export type MessageKey = keyof typeof en;
