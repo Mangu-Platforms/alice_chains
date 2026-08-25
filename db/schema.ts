@@ -7,7 +7,19 @@ import {
   timestamp,
   bigint,
   boolean,
+  index,
+  uniqueIndex,
+  foreignKey,
+  type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
+
+// S-3. Until migration 0002 this file declared six tables with 0 foreign keys,
+// 0 secondary indexes and 1 unique constraint, so referential integrity,
+// idempotency and every hot-path lookup were unprotected — and the
+// `onDuplicateKeyUpdate` / try-catch duplicate handlers scattered through the
+// routers could never fire, because there was no unique key to conflict on.
+// Constraint names are explicit so the generated SQL is deterministic.
+// See DATA_MODEL.md 3.1-3.3 for the per-constraint justification.
 
 // ─── Users (managed by auth) ──────────────────────────────────────
 export const users = mysqlTable("users", {
@@ -30,77 +42,173 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
 // ─── Conversations ────────────────────────────────────────────────
-export const conversations = mysqlTable("conversations", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }),
-  type: mysqlEnum("type", ["direct", "group"]).default("direct").notNull(),
-  avatar: text("avatar"),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
-});
+export const conversations = mysqlTable(
+  "conversations",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 255 }),
+    type: mysqlEnum("type", ["direct", "group"]).default("direct").notNull(),
+    avatar: text("avatar"),
+    createdBy: bigint("createdBy", { mode: "number", unsigned: true }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    index("conversations_createdBy_idx").on(t.createdBy),
+    // FK-10 RESTRICT, not CASCADE: a group must not evaporate when its creator
+    // closes their account. Forces the explicit ownership transfer F-7 adds.
+    foreignKey({
+      name: "conversations_createdBy_users_id_fk",
+      columns: [t.createdBy],
+      foreignColumns: [users.id],
+    }).onDelete("restrict"),
+  ]
+);
 
 export type Conversation = typeof conversations.$inferSelect;
 export type InsertConversation = typeof conversations.$inferInsert;
 
 // ─── Conversation Participants ────────────────────────────────────
-export const conversationParticipants = mysqlTable("conversation_participants", {
-  id: serial("id").primaryKey(),
-  conversationId: bigint("conversationId", { mode: "number", unsigned: true }).notNull(),
-  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-  joinedAt: timestamp("joinedAt").defaultNow().notNull(),
-  lastReadAt: timestamp("lastReadAt"),
-});
+export const conversationParticipants = mysqlTable(
+  "conversation_participants",
+  {
+    id: serial("id").primaryKey(),
+    conversationId: bigint("conversationId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    joinedAt: timestamp("joinedAt").defaultNow().notNull(),
+    lastReadAt: timestamp("lastReadAt"),
+  },
+  (t) => [
+    uniqueIndex("cp_conversation_user_uq").on(t.conversationId, t.userId), // UQ-1
+    index("cp_user_idx").on(t.userId), // IX-2
+    foreignKey({
+      name: "cp_conversationId_conversations_id_fk",
+      columns: [t.conversationId],
+      foreignColumns: [conversations.id],
+    }).onDelete("cascade"), // FK-1
+    // FK-2 CASCADE: the membership row IS the ACL, so a dangling one would
+    // grant permission to a principal that no longer exists.
+    foreignKey({
+      name: "cp_userId_users_id_fk",
+      columns: [t.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"),
+  ]
+);
 
 export type ConversationParticipant = typeof conversationParticipants.$inferSelect;
 export type InsertConversationParticipant = typeof conversationParticipants.$inferInsert;
 
 // ─── Messages ─────────────────────────────────────────────────────
-export const messages = mysqlTable("messages", {
-  id: serial("id").primaryKey(),
-  conversationId: bigint("conversationId", { mode: "number", unsigned: true }).notNull(),
-  senderId: bigint("senderId", { mode: "number", unsigned: true }).notNull(),
-  content: text("content").notNull(),
-  type: mysqlEnum("type", ["text", "image", "file"]).default("text").notNull(),
-  fileUrl: text("fileUrl"),
-  replyToId: bigint("replyToId", { mode: "number", unsigned: true }),
-  isEdited: boolean("isEdited").default(false).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
-});
+export const messages = mysqlTable(
+  "messages",
+  {
+    id: serial("id").primaryKey(),
+    conversationId: bigint("conversationId", { mode: "number", unsigned: true }).notNull(),
+    senderId: bigint("senderId", { mode: "number", unsigned: true }).notNull(),
+    content: text("content").notNull(),
+    type: mysqlEnum("type", ["text", "image", "file"]).default("text").notNull(),
+    fileUrl: text("fileUrl"),
+    replyToId: bigint("replyToId", { mode: "number", unsigned: true }),
+    isEdited: boolean("isEdited").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    index("messages_conversation_created_idx").on(t.conversationId, t.createdAt), // IX-1
+    index("messages_sender_idx").on(t.senderId), // IX-6
+    index("messages_replyTo_idx").on(t.replyToId),
+    foreignKey({
+      name: "messages_conversationId_conversations_id_fk",
+      columns: [t.conversationId],
+      foreignColumns: [conversations.id],
+    }).onDelete("cascade"), // FK-3
+    // FK-4 RESTRICT: deleting a user must not silently erase a conversation's
+    // history for everyone else in it.
+    foreignKey({
+      name: "messages_senderId_users_id_fk",
+      columns: [t.senderId],
+      foreignColumns: [users.id],
+    }).onDelete("restrict"),
+    // FK-5 SET NULL: a deleted parent degrades the reply to a normal message
+    // rather than cascade-deleting an unrelated author's post.
+    foreignKey({
+      name: "messages_replyToId_messages_id_fk",
+      columns: [t.replyToId],
+      foreignColumns: [t.id as AnyMySqlColumn],
+    }).onDelete("set null"),
+  ]
+);
 
 export type Message = typeof messages.$inferSelect;
 export type InsertMessage = typeof messages.$inferInsert;
 
 // ─── Message Read Receipts ────────────────────────────────────────
-export const messageReads = mysqlTable("message_reads", {
-  id: serial("id").primaryKey(),
-  messageId: bigint("messageId", { mode: "number", unsigned: true }).notNull(),
-  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-  readAt: timestamp("readAt").defaultNow().notNull(),
-});
+export const messageReads = mysqlTable(
+  "message_reads",
+  {
+    id: serial("id").primaryKey(),
+    messageId: bigint("messageId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    readAt: timestamp("readAt").defaultNow().notNull(),
+  },
+  (t) => [
+    // UQ-2. Its leading column also serves the receipt fetch, so the separately
+    // listed IX-5 would be redundant and is deliberately omitted.
+    uniqueIndex("message_reads_message_user_uq").on(t.messageId, t.userId),
+    index("message_reads_user_idx").on(t.userId),
+    foreignKey({
+      name: "message_reads_messageId_messages_id_fk",
+      columns: [t.messageId],
+      foreignColumns: [messages.id],
+    }).onDelete("cascade"), // FK-6
+    foreignKey({
+      name: "message_reads_userId_users_id_fk",
+      columns: [t.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"), // FK-7
+  ]
+);
 
 export type MessageRead = typeof messageReads.$inferSelect;
 
 // ─── Contacts (Friend relationships) ──────────────────────────────
-export const contacts = mysqlTable("contacts", {
-  id: serial("id").primaryKey(),
-  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-  contactUserId: bigint("contactUserId", { mode: "number", unsigned: true }).notNull(),
-  status: mysqlEnum("status", ["pending", "accepted", "blocked"]).default("pending").notNull(),
-  nickname: varchar("nickname", { length: 255 }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
-});
+export const contacts = mysqlTable(
+  "contacts",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    contactUserId: bigint("contactUserId", { mode: "number", unsigned: true }).notNull(),
+    status: mysqlEnum("status", ["pending", "accepted", "blocked"]).default("pending").notNull(),
+    nickname: varchar("nickname", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("contacts_user_contact_uq").on(t.userId, t.contactUserId), // UQ-3
+    index("contacts_contactUser_status_idx").on(t.contactUserId, t.status), // IX-3
+    index("contacts_user_status_idx").on(t.userId, t.status), // IX-4
+    foreignKey({
+      name: "contacts_userId_users_id_fk",
+      columns: [t.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"), // FK-8
+    foreignKey({
+      name: "contacts_contactUserId_users_id_fk",
+      columns: [t.contactUserId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"), // FK-9
+  ]
+);
 
 export type Contact = typeof contacts.$inferSelect;
 export type InsertContact = typeof contacts.$inferInsert;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, desc, inArray, sql } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
@@ -130,32 +130,15 @@ export const messageRouter = createRouter({
       // Every id must now live in a conversation the caller belongs to.
       await assertMessagesReadable(userId, input.messageIds, db);
 
-      // S-5. One round trip per id, each wrapped in a try/catch for a
-      // duplicate-key error that cannot fire because no unique key exists.
-      // Now: read what is already there, insert the rest in one statement.
+      // One statement, no read-then-write race. S-3's unique key on
+      // (messageId, userId) is what makes this correct: before it existed,
+      // ON DUPLICATE KEY had nothing to conflict on and the read-then-insert it
+      // replaces could double-write under concurrency.
       const unique = [...new Set(input.messageIds)];
-      const alreadyRead = await db
-        .select({ messageId: messageReads.messageId })
-        .from(messageReads)
-        .where(
-          and(
-            eq(messageReads.userId, userId),
-            inArray(messageReads.messageId, unique)
-          )
-        );
-
-      const seen = new Set(alreadyRead.map((r) => r.messageId));
-      const missing = unique.filter((id) => !seen.has(id));
-
-      // Two concurrent calls can still both see the same id as missing. S-3
-      // adds the unique key on (messageId, userId) that makes the second insert
-      // a no-op instead of a duplicate row; until then the window is narrow and
-      // a duplicate receipt is cosmetic.
-      if (missing.length > 0) {
-        await db
-          .insert(messageReads)
-          .values(missing.map((messageId) => ({ messageId, userId })));
-      }
+      await db
+        .insert(messageReads)
+        .values(unique.map((messageId) => ({ messageId, userId })))
+        .onDuplicateKeyUpdate({ set: { readAt: sql`readAt` } });
 
       return { success: true };
     }),

@@ -1,5 +1,22 @@
 # Alice Chains — CURRENT STATUS
 
+## Handoff 2026-08-25
+
+**Wave 1 is complete and pushed.** S-8, S-9, S-10, S-4, S-5, S-17 all shipped, one commit each, on `claude/continuous-work-session-dlm16p` → [PR #3](https://github.com/Mangu-Platforms/alice_chains/pull/3) (draft). No unauthorized data path from the audit remains open.
+
+- **Gate:** `npm run validate` green. **114 tests** across 7 files, up from 1.
+- **Test infrastructure now exists.** MySQL-backed integration fixtures behind `TEST_DATABASE_URL` (`test/support/db.ts`) and a real Socket.IO harness that boots `initSocket` and connects clients with genuine signed session cookies (`test/support/socket.ts`). Suites skip when `TEST_DATABASE_URL` is unset, so the gate stays green without a database — **CI has no MySQL service yet, so Wave 1's proofs do not run there until S-12.** That is the single biggest open risk.
+- **Every behavioural fix was red-proofed** by disabling the guard and re-running: 5 tests for S-8, 7 for S-9, 9 for S-10, 2 for S-5.
+- **New:** `api/lib/authz.ts` (all membership + blocking predicates), `contracts/oauth.ts` (endpoint contract), `api/lib/cookies.ts` (the only `Set-Cookie` emitter), `api/kimi/pkce.ts`, `sessions` table (migration 0001).
+- **Deleted:** `api/lib/http.ts` and the duplicate `getSessionCookieOptions` (H-2, absorbed by S-17).
+- **Spec corrected in place:** SECURITY.md SEC-C-08 named a cookie-helper placement written before S-4 existed; the deviation and its reason are recorded there.
+
+**Next:** Wave 2 — S-3 (foreign keys, uniques, indexes per DATA_MODEL §3–§4), then S-11. Then Wave 3 (S-7, S-12) which is what puts these proofs in CI.
+
+**Local dev note:** this session runs MySQL 8.0.46 installed directly (no Docker daemon in the sandbox), databases `alice_chains` and `alice_chains_test`, user `alice`/`alice_pw`.
+
+---
+
 **As of:** 2026-08-12 · **Repo:** `Mangu-Platforms/alice_chains` · **Priority:** P1 – ACTIVE
 **Baseline:** `main` @ `3999bca` + the stabilization commit described below.
 

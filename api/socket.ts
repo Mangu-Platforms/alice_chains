@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { getDb } from "./queries/connection";
 import { messages, messageReads, conversationParticipants } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
 import { getSessionToken, verifySessionToken } from "./kimi/session";
 import { isParticipant, messagesBelongToConversation, relatedUserIds } from "./lib/authz";
@@ -232,18 +232,13 @@ export function initSocket(server: HttpServer) {
           // conversation.
           if (!(await messagesBelongToConversation(messageIds, data.conversationId))) return;
 
-          const db = getDb();
-
-          for (const messageId of messageIds) {
-            try {
-              await db.insert(messageReads).values({
-                messageId,
-                userId,
-              });
-            } catch {
-              // Ignore duplicates
-            }
-          }
+          // One statement rather than a loop of try/catch blocks that were
+          // catching a duplicate-key error no unique key could raise. S-3 added
+          // the key, so ON DUPLICATE KEY is now real.
+          await getDb()
+            .insert(messageReads)
+            .values(messageIds.map((messageId) => ({ messageId, userId })))
+            .onDuplicateKeyUpdate({ set: { readAt: sql`readAt` } });
 
           // Notify other participants that messages were read
           socket.to(`conv_${data.conversationId}`).emit("messagesRead", {

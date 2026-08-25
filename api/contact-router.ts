@@ -72,29 +72,26 @@ export const contactRouter = createRouter({
         throw new Error("Cannot add yourself as a contact");
       }
 
-      // Check if contact request already exists
-      const [existing] = await db
-        .select()
-        .from(contacts)
-        .where(
-          and(
-            eq(contacts.userId, userId),
-            eq(contacts.contactUserId, input.contactUserId)
-          )
-        )
-        .limit(1);
+      // S-3. This was a check-then-insert with no unique key behind it, so two
+      // concurrent calls both saw "no existing row" and both inserted. The
+      // unique key on (userId, contactUserId) now makes the insert itself the
+      // arbiter, and the second one is a no-op rather than a duplicate.
+      //
+      // A pair already in any state is left exactly as it is: re-adding must
+      // never reset an `accepted` contact to `pending`, and must never
+      // un-block someone.
+      await db
+        .insert(contacts)
+        .values({
+          userId,
+          contactUserId: input.contactUserId,
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({ set: { status: sql`status` } });
 
-      if (existing) {
-        throw new Error("Contact request already exists");
-      }
-
-      await db.insert(contacts).values({
-        userId,
-        contactUserId: input.contactUserId,
-        status: "pending",
-      });
-
-      // Also create the reverse entry
+      // The reverse row records that the request exists, so the recipient can
+      // see it in `contact.pending`. It carries the same "leave it alone if it
+      // exists" rule for the same reason.
       await db
         .insert(contacts)
         .values({
@@ -102,9 +99,7 @@ export const contactRouter = createRouter({
           contactUserId: userId,
           status: "pending",
         })
-        .onDuplicateKeyUpdate({
-          set: { status: "pending" },
-        });
+        .onDuplicateKeyUpdate({ set: { status: sql`status` } });
 
       return { success: true };
     }),

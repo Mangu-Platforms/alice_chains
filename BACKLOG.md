@@ -34,7 +34,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
-| **S-3** | Foreign keys, unique constraints and indexes per [DATA_MODEL.md §3–§4](docs/DATA_MODEL.md); replace exception-driven duplicate handling | P0 | S-9 | Not started |
+| **S-3** | Foreign keys, unique constraints and indexes per [DATA_MODEL.md §3–§4](docs/DATA_MODEL.md); replace exception-driven duplicate handling | P0 | S-9 | ✅ Done |
 | **S-11** | Make `conversations.updatedAt` real on every message write; compute `unreadCount` in `conversation.list` | P0 | S-3 | Not started |
 
 ## Wave 3 — Trustworthy tests
