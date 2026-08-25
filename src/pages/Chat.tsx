@@ -48,7 +48,7 @@ import {
 import { toast } from "sonner";
 import { t, formatTime, formatMessageTimestamp } from "@/i18n";
 import { LiveRegion } from "@/components/LiveRegion";
-import { MAX_MESSAGE_LENGTH } from "@contracts/constants";
+import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
 import {
   ALLOWED_MIME_TYPES,
@@ -83,6 +83,11 @@ export default function Chat() {
   // S-20. What a screen reader should be told about, most recently. Rendered
   // into a polite live region below.
   const [announcement, setAnnouncement] = useState<string | null>(null);
+  // P-SEARCH. The header's search icon was a stub S-20 removed rather than
+  // leave lying; this is what brings it back, live.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [messageQuery, setMessageQuery] = useState("");
+  const [searchEverywhere, setSearchEverywhere] = useState(false);
   const [replyingTo, setReplyingTo] = useState<{
     id: number;
     content: string;
@@ -149,6 +154,18 @@ export default function Chat() {
 
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState("");
+
+  const trimmedMessageQuery = messageQuery.trim();
+  const messageQueryIsSearchable =
+    trimmedMessageQuery.length >= MIN_SEARCH_QUERY_LENGTH;
+  const messageSearch = trpc.message.search.useQuery(
+    {
+      query: trimmedMessageQuery,
+      conversationId:
+        searchEverywhere || !activeConversationId ? undefined : activeConversationId,
+    },
+    { enabled: searchOpen && messageQueryIsSearchable }
+  );
 
   const { data: blockedContacts, refetch: refetchBlocked } =
     trpc.contact.blocked.useQuery();
@@ -781,12 +798,23 @@ export default function Chat() {
               </div>
               <div className="flex items-center gap-1">
                 {/*
-                  S-20 / P-UX-1. The phone, video and search icons sat here
-                  doing nothing when pressed. Labelling a control that lies is
-                  worse than removing it — a screen reader would then announce
-                  "Start a voice call" for a button that starts nothing. They
-                  come back when P-CALL-1/2 and P-SEARCH-1 ship.
+                  The phone and video icons that used to sit beside this did
+                  nothing when pressed, so S-20 removed them rather than label
+                  a control that lies. They return with P-CALL-1/2. Search is
+                  live as of P-SEARCH-1.
                 */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("a11y.searchMessages")}
+                  aria-expanded={searchOpen}
+                  onClick={() => {
+                    setSearchOpen((open) => !open);
+                    setMessageQuery("");
+                  }}
+                >
+                  <Search className="w-4 h-4" />
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -850,6 +878,124 @@ export default function Chat() {
             </header>
 
             {/* Messages Area */}
+            {searchOpen && (
+              <div className="border-b border-border bg-card/30 px-4 py-3 space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      value={messageQuery}
+                      onChange={(e) => setMessageQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setSearchOpen(false);
+                      }}
+                      placeholder={
+                        searchEverywhere
+                          ? t("search.placeholderGlobal")
+                          : t("search.placeholderConversation")
+                      }
+                      aria-label={t("a11y.searchMessages")}
+                      className="pl-9 bg-secondary/50 border-0"
+                      autoFocus
+                    />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("a11y.closeSearch")}
+                    onClick={() => setSearchOpen(false)}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs">
+                  {/*
+                    P-SEARCH-2. The same query, two scopes. `aria-pressed`
+                    rather than two links, because this toggles the scope of
+                    what is already on screen.
+                  */}
+                  {[false, true].map((everywhere) => (
+                    <button
+                      key={String(everywhere)}
+                      onClick={() => setSearchEverywhere(everywhere)}
+                      aria-pressed={searchEverywhere === everywhere}
+                      className={`px-2 py-1 rounded-md transition-colors ${
+                        searchEverywhere === everywhere
+                          ? "bg-primary/20 text-primary"
+                          : "text-muted-foreground hover:bg-secondary/60"
+                      }`}
+                    >
+                      {everywhere
+                        ? t("search.scopeEverywhere")
+                        : t("search.scopeThisConversation")}
+                    </button>
+                  ))}
+                  {messageQueryIsSearchable && messageSearch.isSuccess && (
+                    <span className="ml-auto text-muted-foreground" role="status">
+                      {t("search.resultCount", messageSearch.data.length)}
+                    </span>
+                  )}
+                </div>
+
+                <ScrollArea className="max-h-64">
+                  {!messageQueryIsSearchable ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      {t("search.prompt", MIN_SEARCH_QUERY_LENGTH)}
+                    </p>
+                  ) : messageSearch.isPending ? (
+                    <div className="py-4 text-center">
+                      <Spinner className="w-5 h-5 mx-auto" />
+                    </div>
+                  ) : messageSearch.isError ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      {messageSearch.error.message}
+                    </p>
+                  ) : messageSearch.data.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      {t("search.noResults")}
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {messageSearch.data.map((result) => (
+                        <li key={result.id}>
+                          <button
+                            onClick={() => {
+                              if (result.conversationId !== activeConversationId) {
+                                selectConversation(result.conversationId);
+                              }
+                              setSearchOpen(false);
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-secondary/60 transition-colors"
+                          >
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-xs font-medium truncate">
+                                {result.senderName || "Unknown"}
+                                {searchEverywhere && (
+                                  <span className="text-muted-foreground font-normal">
+                                    {" · "}
+                                    {result.conversationType === "group"
+                                      ? result.conversationName || "Group"
+                                      : "Direct"}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                                {formatMessageTimestamp(result.createdAt)}
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground truncate mt-0.5">
+                              {result.content}
+                            </p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </ScrollArea>
+              </div>
+            )}
+
             <ScrollArea className="flex-1 px-4">
               {/*
                 A log, not a list: `role="log"` tells a screen reader that

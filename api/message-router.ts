@@ -18,6 +18,9 @@ import { notifyNewMessage } from "./lib/push/notify";
 import { messages, messageReactions, messageReads, users } from "@db/schema";
 import { MAX_MESSAGE_LENGTH, MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
+import { MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
+import { isFullTextEligible, toBooleanQuery } from "./lib/search";
+import { escapeLikePattern } from "./lib/sql";
 
 /**
  * Resolve a message the caller is allowed to modify.
@@ -58,6 +61,18 @@ async function assertOwnMessage(
  */
 const parentMessage = alias(messages, "parentMessage");
 const parentSender = alias(users, "parentSender");
+
+/** Row shape of the search statement. */
+interface SearchRow {
+  id: number;
+  conversationId: number;
+  senderId: number;
+  content: string;
+  createdAt: Date;
+  senderName: string | null;
+  conversationName: string | null;
+  conversationType: "direct" | "group";
+}
 
 export interface ReactionSummary {
   emoji: string;
@@ -412,6 +427,75 @@ export const messageRouter = createRouter({
       emitToConversation(message.conversationId, "reactionUpdated", payload);
 
       return payload;
+    }),
+
+  /**
+   * P-SEARCH-1/2 · find messages.
+   *
+   * With `conversationId` the search is scoped to that conversation; without
+   * it, to every conversation the caller belongs to. Either way the membership
+   * join is part of the query rather than a check before it, so a result the
+   * caller may not see cannot be produced in the first place.
+   */
+  search: rateLimited("message.search", Limits.searchBurst, Limits.searchDaily)
+    .input(
+      z.object({
+        query: z.string().trim().min(MIN_SEARCH_QUERY_LENGTH).max(200),
+        conversationId: z.number().int().positive().optional(),
+        limit: z.number().int().min(1).max(50).default(25),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+
+      if (input.conversationId !== undefined) {
+        // A search in a conversation the caller is not in returns nothing
+        // rather than an error: they have no right to learn it exists.
+        if (!(await isParticipant(userId, input.conversationId, db))) return [];
+      }
+
+      const conversationFilter =
+        input.conversationId !== undefined
+          ? sql`AND m.conversationId = ${input.conversationId}`
+          : sql``;
+
+      // The predicate differs, the shape does not. FULLTEXT when the index can
+      // serve the query, a bounded LIKE when it cannot — see api/lib/search.ts.
+      const useFullText = await isFullTextEligible(input.query);
+      const matchPredicate = useFullText
+        ? sql`MATCH(m.content) AGAINST(${toBooleanQuery(input.query)} IN BOOLEAN MODE)`
+        : sql`m.content LIKE ${`%${escapeLikePattern(input.query)}%`}`;
+
+      const rows = await db.execute(sql`
+        SELECT m.id, m.conversationId, m.senderId, m.content, m.createdAt,
+               u.name AS senderName,
+               c.name AS conversationName,
+               c.type AS conversationType
+        FROM messages m
+        JOIN conversation_participants cp
+          ON cp.conversationId = m.conversationId AND cp.userId = ${userId}
+        JOIN conversations c ON c.id = m.conversationId
+        LEFT JOIN users u ON u.id = m.senderId
+        WHERE m.deletedAt IS NULL
+          AND ${matchPredicate}
+          ${conversationFilter}
+        ORDER BY m.createdAt DESC, m.id DESC
+        LIMIT ${input.limit}
+      `);
+
+      const results = (rows as unknown as [SearchRow[]])[0];
+
+      return results.map((row) => ({
+        id: Number(row.id),
+        conversationId: Number(row.conversationId),
+        senderId: Number(row.senderId),
+        senderName: row.senderName,
+        conversationName: row.conversationName,
+        conversationType: row.conversationType,
+        content: row.content,
+        createdAt: row.createdAt,
+      }));
     }),
 
   markAsRead: authedQuery

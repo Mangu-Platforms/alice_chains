@@ -508,7 +508,7 @@ All budgets are measured against the reference deployment defined in §8.3 unles
 | C-5 | Socket.IO is served on the same origin at `/socket.io` and proxied in dev (`vite.config.ts:21-25`); the path is fixed by `api/socket.ts:27`. |
 | C-6 | Port contract: dev client 3000, dev API 3001, prod 3000 — mirrored in `contracts/constants.ts:17-19` and `vite.config.ts:15-20` and guarded by TC-REG-09. |
 | C-7 | Identity is entirely delegated to Kimi: there is no local password, no email verification, and no sign-up flow. If the IdP is unreachable, no new member can join. |
-| C-8 | MySQL `timestamp` columns as generated have 1-second resolution (`db/migrations/0000_lumpy_marten_broadcloak.sql`), which constrains message ordering (FR-MSG-11). |
+| C-8 | ~~MySQL `timestamp` columns have 1-second resolution, which constrains message ordering (FR-MSG-11).~~ **Resolved by H-8** (migration 0008): the columns ordering and unread counts depend on are `timestamp(3)` with `now(3)` defaults. Both halves were required — MySQL stores `.000` into a `timestamp(3)` column whose default is plain `now()`. |
 
 ### 8.3 Reference deployment (the target of every NFR measurement)
 

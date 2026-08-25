@@ -64,6 +64,13 @@
       "when": 1787694187285,
       "tag": "0008_flimsy_hannibal_king",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1787694188285,
+      "tag": "0009_message_fulltext",
+      "breakpoints": true
     }
   ]
 }

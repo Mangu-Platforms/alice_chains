@@ -86,3 +86,12 @@ export const MAX_MESSAGE_LENGTH = 4000;
  * few kilobytes, and attachments never travel this path.
  */
 export const MAX_JSON_BODY_BYTES = 256 * 1024;
+
+/**
+ * Shortest accepted message-search query.
+ *
+ * Two rather than three: below the FULLTEXT minimum the search falls back to a
+ * bounded LIKE, so a short query still works — it is simply answered a
+ * different way.
+ */
+export const MIN_SEARCH_QUERY_LENGTH = 2;

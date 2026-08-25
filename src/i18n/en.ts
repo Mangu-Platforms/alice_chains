@@ -36,6 +36,16 @@ export const en = {
   "a11y.removeMember": (name: string) => `Remove ${name} from the group`,
   "a11y.reactWith": (emoji: string) => `React with ${emoji}`,
   "a11y.searchUsers": "Search for a user by name or email address",
+  "a11y.searchMessages": "Search messages",
+  "a11y.closeSearch": "Close search",
+  "search.placeholderConversation": "Search this conversation…",
+  "search.placeholderGlobal": "Search all conversations…",
+  "search.scopeThisConversation": "This conversation",
+  "search.scopeEverywhere": "Everywhere",
+  "search.noResults": "No messages found",
+  "search.prompt": (n: number) => `Type at least ${n} characters to search`,
+  "search.resultCount": (n: number) =>
+    n === 1 ? "1 message found" : `${n} messages found`,
 
   // ── Live announcements ────────────────────────────────────────────────
   // Read aloud by a screen reader as they change, so they are written as

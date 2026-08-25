@@ -156,6 +156,10 @@ export const messages = mysqlTable(
     ),
     index("messages_sender_idx").on(t.senderId), // IX-6
     index("messages_replyTo_idx").on(t.replyToId),
+    // P-SEARCH-1. A FULLTEXT index on the body. Drizzle has no builder for
+    // one, so it is added by hand in migration 0009 and declared here only as
+    // a comment — see docs/DATA_MODEL.md. `content` stays a plain `text`
+    // column; the index is what makes search something other than a full scan.
     foreignKey({
       name: "messages_conversationId_conversations_id_fk",
       columns: [t.conversationId],

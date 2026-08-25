@@ -76,8 +76,8 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
-| **P-SEARCH-1** | In-conversation message search (MySQL FULLTEXT or indexed LIKE; no search engine without an ADR) | P1 | S-3, F-2 | Not started |
-| **P-SEARCH-2** | Global search, scoped to the caller's conversations | P1 | P-SEARCH-1 | Not started |
+| **P-SEARCH-1** | In-conversation message search (MySQL FULLTEXT or indexed LIKE; no search engine without an ADR) | P1 | S-3, F-2 | ✅ Done |
+| **P-SEARCH-2** | Global search, scoped to the caller's conversations | P1 | P-SEARCH-1 | ✅ Done |
 | **P-PROF-1** | Profile settings — display name, status, avatar, sign out everywhere | P1 | F-4, S-17 | Not started |
 | **P-PROF-2** | Persist the sidebar's collapsed state | P2 | — | Not started |
 | **P-UX-1** | Wire or remove every remaining stub; real empty states | P1 | — | Not started |
