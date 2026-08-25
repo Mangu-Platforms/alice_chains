@@ -24,14 +24,35 @@ const bareOrigin = (label: string) =>
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
-  VITE_KIMI_AUTH_URL: bareOrigin("VITE_KIMI_AUTH_URL"),
-  VITE_APP_ID: z.string().min(1),
+  // H-7. Both of these are read on the server only — since S-4 the client
+  // builds no provider URL at all (`src/pages/Login.tsx` links to
+  // `/api/oauth/login` and reads nothing from `import.meta.env`) — so the
+  // `VITE_` prefix has been misleading since then: it survived because
+  // nothing forced the rename. `KIMI_AUTH_URL`/`KIMI_APP_ID` are the target
+  // names; the `VITE_`-prefixed ones stay accepted, optional, and equivalent,
+  // resolved below with the new name preferred. Both optional here so that
+  // setting only one of a pair still parses; `assertAtLeastOneSet` enforces
+  // that at least one actually is.
+  KIMI_AUTH_URL: bareOrigin("KIMI_AUTH_URL").optional(),
+  VITE_KIMI_AUTH_URL: bareOrigin("VITE_KIMI_AUTH_URL").optional(),
+  KIMI_APP_ID: z.string().min(1).optional(),
+  VITE_APP_ID: z.string().min(1).optional(),
   // S-17. Both accepted `min(1)`: a one-character HMAC key started the server
   // and every session in the deployment was forgeable by anyone who guessed it.
   // 32 bytes is the SHA-256 block-equivalent floor; below it the key is the
   // weakest part of the construction.
   APP_SECRET: secret("APP_SECRET"),
-  JWT_SECRET: secret("JWT_SECRET"),
+  // H-7 / ADR-002. `JWT_SECRET` names a JWT this codebase deliberately does
+  // not use (docs/ADR.md ADR-002) — the token is a two-segment signed
+  // envelope, not a three-segment JOSE structure. `SESSION_SECRET` is the
+  // target name; `JWT_SECRET` stays accepted, optional, and equivalent.
+  // `SESSION_SECRET_PREVIOUS` is verification-only — accepted alongside the
+  // current key for a rotation window, never used to sign — so rotating the
+  // secret does not sign every member out the moment it changes
+  // (docs/SECURITY.md §10 item 4).
+  SESSION_SECRET: secret("SESSION_SECRET").optional(),
+  JWT_SECRET: secret("JWT_SECRET").optional(),
+  SESSION_SECRET_PREVIOUS: secret("SESSION_SECRET_PREVIOUS").optional(),
   PORT: z.string().default("3000"),
   // Dev-only: the port the API binds while Vite serves the client on 3000 and
   // proxies /api + /socket.io here. Must match CLIENT_PORT/API_PORT in
@@ -139,6 +160,72 @@ assertNoLeakedSecrets(process.env);
 export const declaredEnvKeys: readonly string[] = Object.keys(envSchema.shape);
 
 export const env = envSchema.parse(process.env);
+
+/**
+ * Resolve a renamed variable that still accepts its old name (H-7, ADR-002).
+ *
+ * Throws when neither is set — there is no sensible default for an OAuth
+ * origin, a client id, or a signing key. Warns once, at boot, when only the
+ * legacy name is present, naming both names so the fix is one line to make;
+ * says nothing when the current name is set, whether or not the legacy one
+ * still lingers alongside it (the documented migration path sets both to the
+ * same value for one release before the old one is dropped).
+ *
+ * A pure function over its arguments rather than reading `process.env`
+ * itself, so the three call sites below are the only place that decides
+ * which concrete variables this applies to — and so the resolution rule
+ * itself is unit-testable without re-parsing the schema.
+ */
+export function resolveRenamedVar(
+  current: string | undefined,
+  legacy: string | undefined,
+  currentName: string,
+  legacyName: string
+): string {
+  if (current !== undefined) return current;
+  if (legacy !== undefined) {
+    console.warn(
+      `[config.deprecated] ${legacyName} is set but ${currentName} is not. ` +
+        `${legacyName} still works but will be removed in a future release — ` +
+        `set ${currentName} to the same value.`
+    );
+    return legacy;
+  }
+  throw new Error(`Refusing to start: set ${currentName} (or the deprecated ${legacyName}).`);
+}
+
+/** The OAuth provider's origin — `KIMI_AUTH_URL`, falling back to `VITE_KIMI_AUTH_URL`. */
+export const kimiAuthUrl = resolveRenamedVar(
+  env.KIMI_AUTH_URL,
+  env.VITE_KIMI_AUTH_URL,
+  "KIMI_AUTH_URL",
+  "VITE_KIMI_AUTH_URL"
+);
+
+/** The OAuth client id — `KIMI_APP_ID`, falling back to `VITE_APP_ID`. */
+export const kimiAppId = resolveRenamedVar(
+  env.KIMI_APP_ID,
+  env.VITE_APP_ID,
+  "KIMI_APP_ID",
+  "VITE_APP_ID"
+);
+
+/**
+ * The session-signing key — `SESSION_SECRET`, falling back to `JWT_SECRET`
+ * (ADR-002). Used for signing; also the first key tried on verification.
+ */
+export const sessionSecret = resolveRenamedVar(
+  env.SESSION_SECRET,
+  env.JWT_SECRET,
+  "SESSION_SECRET",
+  "JWT_SECRET"
+);
+
+/**
+ * A prior signing key, honoured for verification only, never for signing.
+ * Unset outside a rotation window (docs/SECURITY.md §10 item 4).
+ */
+export const sessionSecretPrevious = env.SESSION_SECRET_PREVIOUS;
 
 // Fail at boot rather than on the first upload: an operator who selects the s3
 // driver and forgets a credential should learn immediately.

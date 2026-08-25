@@ -53,7 +53,7 @@ If `npm run validate` is not green on a clean checkout, stop and fix that first 
 - **Socket payloads are not validated at runtime.** They are destructured with TypeScript types, which vanish at compile time.
 - **The `try/catch` duplicate-key handlers are dead code.** There are no unique constraints yet, so nothing can throw. Adding the constraints (S-3) is what makes them meaningful — or lets you delete them for `onDuplicateKeyUpdate`.
 - **`conversations.updatedAt` is never written**, yet `conversation.list` orders by it. Sorting looks like recency and is actually creation order.
-- **`JWT_SECRET` is a misnomer.** Sessions are HMAC-SHA256 signed cookies, not JWTs. A rename to `SESSION_SECRET` is planned; keep backwards compatibility when you do it.
+- **`JWT_SECRET` was a misnomer.** Sessions are HMAC-SHA256 signed cookies, not JWTs. Renamed to `SESSION_SECRET` in H-7, with `JWT_SECRET` still accepted, deprecated, for one release (ADR-002). `VITE_KIMI_AUTH_URL`/`VITE_APP_ID` were renamed the same way, to `KIMI_AUTH_URL`/`KIMI_APP_ID` — both were read only on the server even before the rename.
 - **`OWNER_UNION_ID` does nothing.** It is parsed and exposed via `getOwnerUnionId()`, which has zero call sites. There is no admin capability today.
 - **Lint after a build used to explode.** `eslint.config.js` now ignores `dist/**`; keep it that way.
 - **Supabase Pro is not provisioned.** Nothing depends on it. Do not design around it.

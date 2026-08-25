@@ -13,10 +13,14 @@
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "mysql://user:pass@127.0.0.1:3306/alice_test";
-process.env.VITE_KIMI_AUTH_URL ??= "https://auth.example.com";
-process.env.VITE_APP_ID ??= "test-app";
+process.env.KIMI_AUTH_URL ??= "https://auth.example.com";
+process.env.KIMI_APP_ID ??= "test-app";
 process.env.APP_SECRET ??= "test-app-secret-at-least-32-bytes-long!!";
-process.env.JWT_SECRET ??= "test-signing-secret-at-least-32-bytes!!";
+process.env.SESSION_SECRET ??= "test-signing-secret-at-least-32-bytes!!";
+// H-7 / ADR-002. A fixed, known previous key so a test can sign a token
+// under it directly and confirm the rotation window actually accepts it.
+process.env.SESSION_SECRET_PREVIOUS ??=
+  "test-previous-signing-secret-at-least-32-bytes!!";
 process.env.PUBLIC_BASE_URL ??= "http://localhost:3000";
 
 /**

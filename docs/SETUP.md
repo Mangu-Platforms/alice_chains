@@ -77,10 +77,11 @@ Then edit `.env`. `api/lib/env.ts` is the authoritative schema — it Zod-valida
 | Variable | Required | Meaning |
 |---|---|---|
 | `DATABASE_URL` | yes | MySQL connection string used by the mysql2 pool and by drizzle-kit. Matches the compose defaults out of the box: `mysql://alice:alice_pw@localhost:3306/alice_chains` |
-| `VITE_KIMI_AUTH_URL` | yes | The identity provider's **origin only** — scheme + host (+ port). No path, no query, no trailing slash. The app appends `/oauth/authorize`, `/api/oauth/token` and `/api/oauth/userinfo` itself. `VITE_`-prefixed, so Vite inlines it into the public client bundle: it is public, and must never hold a secret |
-| `VITE_APP_ID` | yes | OAuth `client_id`. Public by definition (RFC 6749) and likewise inlined into the bundle |
+| `KIMI_AUTH_URL` | yes | The identity provider's **origin only** — scheme + host (+ port). No path, no query, no trailing slash. The app appends `/oauth/authorize`, `/api/oauth/token` and `/api/oauth/userinfo` itself. Read on the **server only** — despite carrying a `VITE_` prefix until H-7, the client has built no provider URL since S-4. The old name, `VITE_KIMI_AUTH_URL`, still works, deprecated, for one release (ADR-002) |
+| `KIMI_APP_ID` | yes | OAuth `client_id`. Server-side only, same history as above. The old name was `VITE_APP_ID`, still accepted |
 | `APP_SECRET` | yes | OAuth **client secret**. Server-side only. Never rename it with a `VITE_` prefix |
-| `JWT_SECRET` | yes | Key that signs the session cookie. Historical name — sessions are HMAC-SHA256 signed cookies, not JWTs (a rename to `SESSION_SECRET` is planned). Generate with `openssl rand -base64 32` |
+| `SESSION_SECRET` | yes | Key that signs the session cookie. Sessions are HMAC-SHA256 signed cookies, not JWTs — `JWT_SECRET` was the historical, misleading name and still works, deprecated, for one release (ADR-002). Generate with `openssl rand -base64 32` |
+| `SESSION_SECRET_PREVIOUS` | no | Set only while rotating `SESSION_SECRET`: the old key, so a token signed under it still verifies for a rotation window. Never used to sign a new token |
 | `PUBLIC_BASE_URL` | prod | The canonical origin users reach this deployment on, e.g. `http://localhost:3000` in dev. Required in production and behind any reverse proxy so the OAuth `redirect_uri` is identical on both legs of the exchange |
 | `PORT` | no | Production port. Default `3000` |
 | `API_PORT` | no | Dev-only API port; must match the Vite proxy target. Default `3001` |
@@ -169,7 +170,7 @@ docker compose up
 
 That builds the image, starts MySQL, runs a one-shot `migrate` service that applies migrations and exits, then starts the app on **http://localhost:3000** in production mode (single process serving the client and the API).
 
-Compose reads `.env` and **requires** `VITE_KIMI_AUTH_URL`, `VITE_APP_ID`, `APP_SECRET` and `JWT_SECRET` to be set — it fails fast with a named error if any is missing. The two `VITE_*` values are also build args, because they are baked into the client bundle at build time: **changing either requires a rebuild** (`docker compose up --build`), not just a restart.
+Compose reads `.env` and **requires** `KIMI_AUTH_URL` (or the deprecated `VITE_KIMI_AUTH_URL`), `KIMI_APP_ID` (or `VITE_APP_ID`), `APP_SECRET` and `SESSION_SECRET` (or `JWT_SECRET`) to be set — it fails fast with a named error if none of a pair is. These are plain runtime environment variables, not build args — the client never reads them, so changing one only needs a restart (`docker compose up`), not a rebuild. (An earlier version of this document said otherwise; it was wrong even before H-7 — the client has built no provider URL since S-4.)
 
 ---
 
@@ -210,7 +211,7 @@ Details, including the harness layers, in [test/README.md](../test/README.md).
 | `ECONNREFUSED 127.0.0.1:3306` or `ER_ACCESS_DENIED` | MySQL is not up or `DATABASE_URL` is wrong. `docker compose ps` → is `db` `healthy`? First boot takes ~30 s; `npm run db:migrate` run too early fails on connection, not on schema. Just wait and re-run |
 | Migrations run but tables are missing | You are pointed at a different database than the app. Compare the database name in `DATABASE_URL` with `MYSQL_DATABASE` in `docker-compose.yml` (default `alice_chains`) |
 | Crash on start: `ZodError` listing env keys | `.env` is missing or malformed. Compare it against the table in §3; every "yes" row must be present and non-empty. Before P-TOOL-1 this happened even with a perfectly good `.env`, because nothing loaded it — if you see it on an older checkout, that is why |
-| Sign-in redirects to `.../oauth/authorize/oauth/authorize` | `VITE_KIMI_AUTH_URL` holds a **full authorize URL** instead of an origin. It must be `https://auth.example.com`, not `https://auth.example.com/oauth/authorize` — the app derives all three endpoint paths from it |
+| Sign-in redirects to `.../oauth/authorize/oauth/authorize` | `KIMI_AUTH_URL` (or `VITE_KIMI_AUTH_URL`) holds a **full authorize URL** instead of an origin. It must be `https://auth.example.com`, not `https://auth.example.com/oauth/authorize` — the app derives all three endpoint paths from it |
 | 400 at `/api/oauth/callback`, or the provider rejects the exchange | The `redirect_uri` differs between the two legs of the exchange. Set `PUBLIC_BASE_URL` to the origin users actually reach (`http://localhost:3000` in dev) and register exactly `{PUBLIC_BASE_URL}/api/oauth/callback` with the provider |
 | Socket connects then immediately disconnects | The session cookie is missing or expired — sign in again. The handshake requires a valid `alice_session` cookie |
 | `npm run lint` reports ~1900 errors after a build | That was the old failure mode: ESLint flat config only ignores `node_modules`/`.git` by default, so it linted the bundled `dist/boot.js`. `eslint.config.js:12` now ignores `dist/**`, `db/migrations/**` and `coverage/**`. If you see it again, that ignores block has been removed — restore it rather than deleting `dist/` |

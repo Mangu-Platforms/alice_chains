@@ -89,11 +89,18 @@ services:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: mysql://${MYSQL_USER:-alice}:${MYSQL_PASSWORD:-alice_pw}@db:3306/${MYSQL_DATABASE:-alice_chains}
-      VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL:?set VITE_KIMI_AUTH_URL in .env}
-      VITE_APP_ID: ${VITE_APP_ID:?set VITE_APP_ID in .env}
+      # H-7. Read on the server only, both before and after this rename — the
+      # names have never carried anything the client uses. The nested default
+      # keeps a .env that only sets the deprecated VITE_ name working with no
+      # operator change required (ADR-002's migration path); the app's own
+      # fallback in api/lib/env.ts does the same for a non-compose deployment.
+      KIMI_AUTH_URL: ${KIMI_AUTH_URL:-${VITE_KIMI_AUTH_URL:?set KIMI_AUTH_URL (or the deprecated VITE_KIMI_AUTH_URL) in .env}}
+      KIMI_APP_ID: ${KIMI_APP_ID:-${VITE_APP_ID:?set KIMI_APP_ID (or the deprecated VITE_APP_ID) in .env}}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      SESSION_SECRET: ${SESSION_SECRET:-${JWT_SECRET:?set SESSION_SECRET (or the deprecated JWT_SECRET) in .env}}
+      # Optional: set only while rotating SESSION_SECRET (docs/SECURITY.md §10).
+      SESSION_SECRET_PREVIOUS: ${SESSION_SECRET_PREVIOUS:-}
       OWNER_UNION_ID: ${OWNER_UNION_ID:-}
       # Attachments. Defaults to the filesystem so the stack works with no
       # extra services; switch to s3 with the minio profile above.

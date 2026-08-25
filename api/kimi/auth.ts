@@ -1,7 +1,7 @@
 import { getSessionToken, startSession, verifySessionToken } from "./session";
 import { findUserByUnionId, upsertUser } from "../queries/users";
 import { createOAuthAttempt, safeEqual } from "./pkce";
-import { env } from "../lib/env";
+import { env, kimiAppId, kimiAuthUrl } from "../lib/env";
 import { log } from "../lib/logger";
 import {
   clearOAuthCookie,
@@ -75,7 +75,7 @@ export function createOAuthLoginHandler() {
     let authorizeUrl: URL;
     let redirectUri: string;
     try {
-      authorizeUrl = new URL(oauthEndpoints(env.VITE_KIMI_AUTH_URL).authorizeUrl);
+      authorizeUrl = new URL(oauthEndpoints(kimiAuthUrl).authorizeUrl);
       redirectUri = oauthRedirectUri(publicBaseUrl(requestUrl));
     } catch (error) {
       // A misconfigured origin is an operator error, not a user error. Say so
@@ -86,7 +86,7 @@ export function createOAuthLoginHandler() {
 
     const attempt = createOAuthAttempt();
 
-    authorizeUrl.searchParams.set("client_id", env.VITE_APP_ID);
+    authorizeUrl.searchParams.set("client_id", kimiAppId);
     authorizeUrl.searchParams.set("redirect_uri", redirectUri);
     authorizeUrl.searchParams.set("response_type", "code");
     authorizeUrl.searchParams.set("state", attempt.state);
@@ -148,7 +148,7 @@ export function createOAuthCallbackHandler() {
     let endpoints;
     let redirectUri: string;
     try {
-      endpoints = oauthEndpoints(env.VITE_KIMI_AUTH_URL);
+      endpoints = oauthEndpoints(kimiAuthUrl);
       redirectUri = oauthRedirectUri(publicBaseUrl(url));
     } catch (error) {
       log.error("OAuth configuration is invalid", { error });
@@ -164,7 +164,7 @@ export function createOAuthCallbackHandler() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code,
-          client_id: env.VITE_APP_ID,
+          client_id: kimiAppId,
           client_secret: env.APP_SECRET,
           grant_type: "authorization_code",
           redirect_uri: redirectUri,

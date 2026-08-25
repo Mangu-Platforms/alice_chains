@@ -47,7 +47,7 @@ tsx watch api/boot.ts  (binds API_PORT=3001 in dev — fixed by S-2)
 
 1. `src/pages/Login.tsx` sends the browser to the Kimi authorize endpoint with `client_id` (`VITE_APP_ID`) and `redirect_uri = {origin}/api/oauth/callback`.
 2. `api/kimi/auth.ts` (`createOAuthCallbackHandler`) exchanges the `code` at the token endpoint using `APP_SECRET`, fetches userinfo with the access token, and **upserts** the user by `unionId` (`api/queries/users.ts`).
-3. A session token is minted by `api/kimi/session.ts`: `base64url(JSON{userId, unionId, name, email, iat}) + "." + HMAC-SHA256(payload, JWT_SECRET)` and set as the `alice_session` cookie (HttpOnly, SameSite=Lax, 7-day max age).
+3. A session token is minted by `api/kimi/session.ts`: `base64url(JSON{userId, unionId, name, email, iat}) + "." + HMAC-SHA256(payload, SESSION_SECRET)` and set as the `alice_session` cookie (HttpOnly, SameSite=Lax, 7-day max age). (`SESSION_SECRET` was `JWT_SECRET` until H-7; the old name still verifies, deprecated.)
 4. Every subsequent request — tRPC (`api/context.ts`) **and** the Socket.IO handshake (`api/socket.ts` middleware) — re-verifies the signature (timing-safe compare) and expiry, then loads the user by `unionId`. `authedQuery` middleware rejects requests with no user (`UNAUTHORIZED`).
 5. `/api/logout` clears the cookie and redirects to `/login`.
 

@@ -81,10 +81,10 @@ Copy `.env.example` and fill it in. Every variable is documented there, and in f
 
 Two rules the server enforces at boot rather than trusting you to remember:
 
-- **`APP_SECRET` and `JWT_SECRET` must be at least 32 characters.** Generate one with `openssl rand -base64 32`. The process refuses to start below that — a one-character HMAC key made every session in the deployment forgeable.
+- **`APP_SECRET` and `SESSION_SECRET` must be at least 32 characters.** Generate one with `openssl rand -base64 32`. The process refuses to start below that — a one-character HMAC key made every session in the deployment forgeable. (`SESSION_SECRET` was `JWT_SECRET`, a misnomer — sessions are HMAC-signed cookies, not JWTs, per [ADR-002](docs/ADR.md). The old name still works, deprecated, for one release.)
 - **No secret may carry a `VITE_` prefix.** Vite inlines every `VITE_*` variable into the public client bundle, so a prefixed secret is published to every visitor. Startup fails naming the offending variable.
 
-`VITE_KIMI_AUTH_URL` and `PUBLIC_BASE_URL` must be bare origins — no path, no query. The server derives every OAuth endpoint from them and refuses a value carrying a path, naming the corrected one.
+`KIMI_AUTH_URL` and `PUBLIC_BASE_URL` must be bare origins — no path, no query. The server derives every OAuth endpoint from them and refuses a value carrying a path, naming the corrected one.
 
 ## Tests
 
@@ -116,10 +116,11 @@ Two things cannot be committed and need a maintainer:
 | Variable | Required | Notes |
 |---|---|---|
 | `DATABASE_URL` | yes | MySQL 8 connection string |
-| `VITE_KIMI_AUTH_URL` | yes | Provider **origin only** — no path, no trailing slash |
-| `VITE_APP_ID` | yes | OAuth client id |
+| `KIMI_AUTH_URL` | yes | Provider **origin only** — no path, no trailing slash. Server-side only despite the `VITE_KIMI_AUTH_URL` name it had until H-7; that name still works, deprecated |
+| `KIMI_APP_ID` | yes | OAuth client id. Was `VITE_APP_ID`; that name still works, deprecated |
 | `APP_SECRET` | yes | OAuth client secret — server-side only |
-| `JWT_SECRET` | yes | Session signing key (≥ 32 random bytes). Historical name; sessions are HMAC, not JWT |
+| `SESSION_SECRET` | yes | Session signing key (≥ 32 random bytes). Sessions are HMAC-signed cookies, not JWT — `JWT_SECRET` was the historical name and still works, deprecated (ADR-002) |
+| `SESSION_SECRET_PREVIOUS` | no | Set only mid-rotation: the old key, while `SESSION_SECRET` above holds the new one. Accepted for verification only; never used to sign |
 | `PUBLIC_BASE_URL` | prod | Canonical public origin; required behind any reverse proxy |
 | `PORT` / `API_PORT` | no | 3000 / 3001 |
 

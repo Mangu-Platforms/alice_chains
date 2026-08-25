@@ -2,15 +2,16 @@
  * BUILD_PLAN S-17 — session lifecycle hardening.
  *
  * Cases: TC-AUTH-17, TC-AUTH-18, TC-AUTH-34…TC-AUTH-37, TC-REG-12, TC-REG-13,
- * TC-REG-19.
+ * TC-REG-19, TC-TOOL-07…09.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { Session } from "@contracts/constants";
 import { sessions } from "@db/schema";
 import { createUser, describeIntegration, resetDatabase } from "../../test/support/db";
 import { getDb } from "../queries/connection";
-import { findLeakedSecretNames } from "../lib/env";
+import { findLeakedSecretNames, resolveRenamedVar } from "../lib/env";
 import {
   clearSessionCookie,
   parseSessionToken,
@@ -26,6 +27,7 @@ import {
   signSessionToken,
   startSession,
   verifySessionToken,
+  verifySignatureAgainstKeys,
 } from "./session";
 
 type Row = Awaited<ReturnType<typeof createUser>>;
@@ -148,6 +150,134 @@ describe("the session cookie (S-17)", () => {
     expect(parseSessionToken(new Headers({ cookie: `${Session.cookieName}=only` }))).toBe(
       "only"
     );
+  });
+});
+
+// ─── Renamed env vars, still accepted under their old names (H-7) ────────
+
+describe("resolving a renamed variable (H-7, ADR-002)", () => {
+  it("prefers the current name when both are set", () => {
+    expect(resolveRenamedVar("new", "old", "NEW_NAME", "OLD_NAME")).toBe("new");
+  });
+
+  it("falls back to the legacy name, with a deprecation warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolveRenamedVar(undefined, "old-value", "NEW_NAME", "OLD_NAME")).toBe(
+      "old-value"
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    // The message names both variables, so the fix is legible without
+    // reading the source — a warning that only says "deprecated" sends
+    // whoever reads it back to the docs for the one fact that matters.
+    expect(warn.mock.calls[0][0]).toContain("NEW_NAME");
+    expect(warn.mock.calls[0][0]).toContain("OLD_NAME");
+    warn.mockRestore();
+  });
+
+  it("says nothing when the current name is set, legacy or not", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resolveRenamedVar("new", "old", "NEW_NAME", "OLD_NAME");
+    resolveRenamedVar("new", undefined, "NEW_NAME", "OLD_NAME");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("refuses when neither is set — there is no safe default for a signing key", () => {
+    expect(() => resolveRenamedVar(undefined, undefined, "NEW_NAME", "OLD_NAME")).toThrow(
+      /NEW_NAME.*OLD_NAME/s
+    );
+  });
+});
+
+// ─── Verifying a signature against a list of keys (H-7, ADR-002) ─────────
+
+describe("signature verification against a key list (H-7, ADR-002)", () => {
+  const hmac = (payload: string, key: string) =>
+    createHmac("sha256", key).update(payload).digest("base64url");
+
+  it("accepts a signature made with the first key", () => {
+    const signed = hmac("payload", "key-one");
+    expect(verifySignatureAgainstKeys("payload", signed, ["key-one", "key-two"])).toBe(true);
+  });
+
+  it("accepts a signature made with a later key — this is the whole point of a rotation window", () => {
+    const signed = hmac("payload", "key-two");
+    expect(verifySignatureAgainstKeys("payload", signed, ["key-one", "key-two"])).toBe(true);
+  });
+
+  it("rejects a signature made with a key that is not in the list", () => {
+    const signed = hmac("payload", "some-other-key");
+    expect(verifySignatureAgainstKeys("payload", signed, ["key-one", "key-two"])).toBe(false);
+  });
+
+  it("rejects a tampered payload even when the signature was once valid for it", () => {
+    const signed = hmac("payload", "key-one");
+    expect(verifySignatureAgainstKeys("payload-changed", signed, ["key-one"])).toBe(false);
+  });
+
+  it("rejects everything against an empty key list", () => {
+    expect(verifySignatureAgainstKeys("payload", hmac("payload", "key-one"), [])).toBe(false);
+  });
+});
+
+// ─── The rotation window, exercised through the real, configured keys ─────
+//
+// test/setup.ts fixes SESSION_SECRET_PREVIOUS to a known value for the whole
+// run, so a token can be signed under it directly here — with no module reset
+// and no second process — and handed to the real decodeSessionToken to prove
+// the wiring, not just the pure function above.
+
+describe("the session store honours a previous signing key (H-7, ADR-002)", () => {
+  const previousKey = process.env.SESSION_SECRET_PREVIOUS!;
+  const payload = (session: object) =>
+    Buffer.from(JSON.stringify(session)).toString("base64url");
+  const signWith = (key: string, session: object) => {
+    const p = payload(session);
+    return `${p}.${createHmac("sha256", key).update(p).digest("base64url")}`;
+  };
+
+  it("accepts a token signed under the previous key", () => {
+    const token = signWith(previousKey, {
+      userId: 1,
+      unionId: "u1",
+      name: "Rotated",
+      sid: "sid-1",
+      v: Session.payloadVersion,
+      iat: Date.now(),
+    });
+
+    expect(decodeSessionToken(token)?.unionId).toBe("u1");
+  });
+
+  it("still rejects a token signed under neither configured key", () => {
+    const token = signWith("a key nobody configured", {
+      userId: 1,
+      unionId: "u1",
+      name: "Rotated",
+      sid: "sid-1",
+      v: Session.payloadVersion,
+      iat: Date.now(),
+    });
+
+    expect(decodeSessionToken(token)).toBeUndefined();
+  });
+
+  it("signs new tokens only with the current key, never the previous one", () => {
+    // If this ever signed with the previous key, a verifier holding only the
+    // current key — the state every deployment settles into once rotation is
+    // done — would reject every token this process issues.
+    const token = signSessionToken({
+      userId: 1,
+      unionId: "u1",
+      name: "Current",
+      sid: "sid-2",
+    });
+    const [tokenPayload, supplied] = token.split(".");
+    const expectedUnderCurrent = createHmac("sha256", process.env.SESSION_SECRET!)
+      .update(tokenPayload)
+      .digest("base64url");
+
+    expect(supplied).toBe(expectedUnderCurrent);
   });
 });
 
