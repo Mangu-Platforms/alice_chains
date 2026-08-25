@@ -6,7 +6,7 @@
  */
 import { beforeAll, beforeEach, afterAll, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { messageReads } from "@db/schema";
+import { conversationParticipants, messageReads } from "@db/schema";
 import {
   createConversation,
   createMessage,
@@ -133,5 +133,106 @@ describeIntegration("message.markAsRead authorization (S-8)", () => {
     await expect(
       caller(mallory).message.listByConversation({ conversationId: sharedConversation })
     ).resolves.toEqual([]);
+  });
+});
+
+/**
+ * BUILD_PLAN S-5 — read receipts came back for only the first message on every
+ * page, because `IN (${ids.join(",")})` binds the joined string as one
+ * parameter and MySQL coerces "11,12,13" to 11.
+ *
+ * Cases: TC-MSG-14, TC-MSG-15, TC-MSG-16, TC-REG-11.
+ */
+describeIntegration("read receipts on message history (S-5)", () => {
+  let alice: Row;
+  let bob: Row;
+  let conversation: number;
+  let messageIds: number[];
+
+  beforeEach(async () => {
+    await resetDatabase();
+    alice = await createUser({ name: "Alice" });
+    bob = await createUser({ name: "Bob" });
+    conversation = await createConversation([alice.id, bob.id]);
+
+    messageIds = [];
+    for (let i = 0; i < 8; i += 1) {
+      messageIds.push(await createMessage(conversation, alice.id, `message ${i}`));
+    }
+  });
+
+  // TC-MSG-14 — the regression itself.
+  it("returns readBy for every message on the page, not just the first", async () => {
+    await caller(bob).message.markAsRead({ messageIds });
+
+    const page = await caller(alice).message.listByConversation({ conversationId: conversation });
+
+    expect(page).toHaveLength(8);
+    for (const message of page) {
+      expect(message.readBy.map((r) => r.userId)).toEqual([bob.id]);
+    }
+  });
+
+  // TC-MSG-15
+  it("attributes each receipt to the message it belongs to", async () => {
+    const [first, , third] = messageIds;
+    await caller(bob).message.markAsRead({ messageIds: [first, third] });
+
+    const page = await caller(alice).message.listByConversation({ conversationId: conversation });
+    const readIds = page.filter((m) => m.readBy.length > 0).map((m) => m.id);
+
+    expect(new Set(readIds)).toEqual(new Set([first, third]));
+  });
+
+  it("reports every reader of a message, not only one", async () => {
+    const carol = await createUser({ name: "Carol" });
+    await getDb()
+      .insert(conversationParticipants)
+      .values({ conversationId: conversation, userId: carol.id });
+
+    await caller(bob).message.markAsRead({ messageIds: [messageIds[0]] });
+    await caller(carol).message.markAsRead({ messageIds: [messageIds[0]] });
+
+    const page = await caller(alice).message.listByConversation({ conversationId: conversation });
+    const first = page.find((m) => m.id === messageIds[0])!;
+
+    expect(new Set(first.readBy.map((r) => r.userId))).toEqual(new Set([bob.id, carol.id]));
+  });
+
+  // TC-MSG-16
+  it("returns an empty readBy when nobody has read anything", async () => {
+    const page = await caller(alice).message.listByConversation({ conversationId: conversation });
+    for (const message of page) expect(message.readBy).toEqual([]);
+  });
+
+  // TC-REG-11 — marking twice must not double up.
+  it("is idempotent: marking the same ids twice writes one row each", async () => {
+    await caller(bob).message.markAsRead({ messageIds });
+    await caller(bob).message.markAsRead({ messageIds });
+
+    const rows = await getDb()
+      .select()
+      .from(messageReads)
+      .where(eq(messageReads.userId, bob.id));
+    expect(rows).toHaveLength(8);
+  });
+
+  it("adds only the ids that are new on a second, wider call", async () => {
+    await caller(bob).message.markAsRead({ messageIds: messageIds.slice(0, 3) });
+    await caller(bob).message.markAsRead({ messageIds });
+
+    const rows = await getDb()
+      .select()
+      .from(messageReads)
+      .where(eq(messageReads.userId, bob.id));
+    expect(rows).toHaveLength(8);
+  });
+
+  it("keeps receipts per reader rather than per message", async () => {
+    await caller(bob).message.markAsRead({ messageIds: [messageIds[0]] });
+    await caller(alice).message.markAsRead({ messageIds: [messageIds[0]] });
+
+    const rows = await getDb().select().from(messageReads);
+    expect(rows).toHaveLength(2);
   });
 });

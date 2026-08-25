@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { assertMessagesReadable, assertParticipant, isParticipant } from "./lib/authz";
@@ -44,16 +44,23 @@ export const messageRouter = createRouter({
         .limit(input.limit)
         .offset(input.offset);
 
-      // Get read receipts
+      // S-5. This was `sql\`... IN (${messageIds.join(",")})\``, which Drizzle
+      // binds as ONE parameter — `IN (?)` with the value "11,12,13" — and MySQL
+      // then coerces to the integer 11. Read receipts came back for the first
+      // message on every page and no others. Not injectable (the ids are
+      // server-derived and correctly parameterised), but silently wrong.
       const messageIds = msgs.map((m) => m.id);
-      let reads: { messageId: number; userId: number; readAt: Date }[] = [];
-
-      if (messageIds.length > 0) {
-        reads = await db
-          .select()
-          .from(messageReads)
-          .where(sql`${messageReads.messageId} IN (${messageIds.join(",")})`);
-      }
+      const reads =
+        messageIds.length > 0
+          ? await db
+              .select({
+                messageId: messageReads.messageId,
+                userId: messageReads.userId,
+                readAt: messageReads.readAt,
+              })
+              .from(messageReads)
+              .where(inArray(messageReads.messageId, messageIds))
+          : [];
 
       const readsByMessage = new Map<number, typeof reads>();
       for (const r of reads) {
@@ -123,18 +130,31 @@ export const messageRouter = createRouter({
       // Every id must now live in a conversation the caller belongs to.
       await assertMessagesReadable(userId, input.messageIds, db);
 
-      // Ids are deduplicated because there is no unique key on
-      // (messageId, userId) yet — S-3 adds it, and S-5 replaces this loop with
-      // a single multi-row insert.
-      for (const messageId of new Set(input.messageIds)) {
-        try {
-          await db.insert(messageReads).values({
-            messageId,
-            userId,
-          });
-        } catch {
-          // Ignore duplicate errors
-        }
+      // S-5. One round trip per id, each wrapped in a try/catch for a
+      // duplicate-key error that cannot fire because no unique key exists.
+      // Now: read what is already there, insert the rest in one statement.
+      const unique = [...new Set(input.messageIds)];
+      const alreadyRead = await db
+        .select({ messageId: messageReads.messageId })
+        .from(messageReads)
+        .where(
+          and(
+            eq(messageReads.userId, userId),
+            inArray(messageReads.messageId, unique)
+          )
+        );
+
+      const seen = new Set(alreadyRead.map((r) => r.messageId));
+      const missing = unique.filter((id) => !seen.has(id));
+
+      // Two concurrent calls can still both see the same id as missing. S-3
+      // adds the unique key on (messageId, userId) that makes the second insert
+      // a no-op instead of a duplicate row; until then the window is narrow and
+      // a duplicate receipt is cosmetic.
+      if (missing.length > 0) {
+        await db
+          .insert(messageReads)
+          .values(missing.map((messageId) => ({ messageId, userId })));
       }
 
       return { success: true };
