@@ -128,6 +128,16 @@ function assertNoLeakedSecrets(source: Record<string, unknown>) {
 
 assertNoLeakedSecrets(process.env);
 
+/**
+ * Every variable the schema declares (BUILD_PLAN P-TOOL-7).
+ *
+ * These names are never written as `process.env.X` anywhere — the schema
+ * parses the whole object at once — so a scan of the source cannot find them.
+ * `.env.example` is checked against this list, which is what stops a variable
+ * being added here and never documented.
+ */
+export const declaredEnvKeys: readonly string[] = Object.keys(envSchema.shape);
+
 export const env = envSchema.parse(process.env);
 
 // Fail at boot rather than on the first upload: an operator who selects the s3

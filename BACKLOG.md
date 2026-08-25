@@ -96,7 +96,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | ✅ Done — with S-15 |
 | **P-TOOL-5** | npm scripts for every operator task | P2 | Not started |
 | **P-TOOL-6** | Follow SETUP.md as a stranger; fix what fails | P1 | Not started |
-| **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | Not started |
+| **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | ✅ Done — and guarded by `test/env-example.test.ts`, which fails in both directions |
 | **P-TOOL-8** | CI required checks documented in README | P2 | ✅ Done — with S-12 |
 | **P-TOOL-9** | `npm run db:seed` — demo data, dev-only guard | P1 | Not started |
 | **P-TOOL-10** | CONTRIBUTING.md | P2 | Not started |

@@ -260,7 +260,7 @@ PUBLIC_BASE_URL=http://localhost:3000
 | userinfo | `kimiEndpoint(VITE_KIMI_AUTH_URL, "userinfo")` | `api/kimi/auth.ts` (replaces `:60`) |
 | redirect_uri | `new URL(Paths.oauthCallback, PUBLIC_BASE_URL).toString()` — **one constant, both sides** | `src/pages/Login.tsx:6`, `api/kimi/auth.ts:47` |
 
-`api/kimi/platform.ts:8-14` must be rewritten to read from `env` (it currently reads `process.env` directly with `|| ""` fallbacks, bypassing the Zod schema) or deleted — it has no call sites today.
+~~`api/kimi/platform.ts:8-14` must be rewritten to read from `env` (it currently reads `process.env` directly with `|| ""` fallbacks, bypassing the Zod schema) or deleted — it has no call sites today.~~ **Deleted in P-TOOL-7.** It had no call sites, and its `API_BASE` read was the only reference to a variable nothing else in the codebase consumed — documenting it in `.env.example` would have invited an operator to configure something with no effect.
 
 **Authorize request after SEC-C-03/04:**
 
@@ -627,7 +627,7 @@ No upload endpoint exists today. `messages.fileUrl` (`db/schema.ts:68`) and `typ
 
 **`VITE_` rule.** Vite inlines every `VITE_`-prefixed variable into the client bundle at build time — see `Dockerfile:14-18`, which declares them as build args precisely for this reason. Anything `VITE_`-prefixed is **published to every visitor**.
 
-> **Verified, stated plainly: no secret is currently exposed this way.** Only `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` carry the prefix (`src/pages/Login.tsx:4-5`), and both are legitimately public. Grepping the built bundle `dist/public/assets/index-*.js` for `APP_SECRET`, `JWT_SECRET`, `your-app-secret` and `your-jwt-secret` returns **zero matches**. The risk is latent, not realised: `api/lib/env.ts` places `VITE_*` and secrets in the same schema and `api/kimi/platform.ts:10-13` reads both from `process.env` side by side, so a future rename such as `VITE_APP_SECRET` would ship the OAuth client secret to the public without any build error.
+> **Verified, stated plainly: no secret is currently exposed this way.** Only `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` carry the prefix (`src/pages/Login.tsx:4-5`), and both are legitimately public. Grepping the built bundle `dist/public/assets/index-*.js` for `APP_SECRET`, `JWT_SECRET`, `your-app-secret` and `your-jwt-secret` returns **zero matches**. The risk is latent, not realised: `api/lib/env.ts` places `VITE_*` and secrets in the same schema, so a future rename such as `VITE_APP_SECRET` would ship the OAuth client secret to the public without any build error. **Since closed:** `assertNoLeakedSecrets` refuses to boot on such a name, `api/kimi/platform.ts` — which read the two side by side — was deleted in P-TOOL-7, and `test/env-example.test.ts` fails if one appears in `.env.example`.
 
 **Required:**
 
