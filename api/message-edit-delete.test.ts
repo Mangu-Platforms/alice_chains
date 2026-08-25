@@ -221,10 +221,11 @@ describeIntegration("message edit and delete (F-2)", () => {
   });
 
   // ── FR-MSG-11, the ordering this card had to touch ──────────────────────
-  it("orders messages deterministically within the same second", async () => {
-    // MySQL TIMESTAMP here has one-second resolution, so these all share a
-    // createdAt. Without the id tiebreaker the order was arbitrary and could
-    // differ between two fetches of the same page.
+  it("orders messages deterministically when timestamps collide", async () => {
+    // H-8 widened createdAt to milliseconds, which makes a collision rarer but
+    // not impossible — two inserts inside the same millisecond still tie. The
+    // `desc(id)` tiebreaker is what makes the order total, and that is what
+    // this pins: two fetches of the same page must agree.
     const ids = [message];
     for (const text of ["b", "c", "d", "e", "f"]) {
       ids.push(await createMessage(conversation, alice.id, text));

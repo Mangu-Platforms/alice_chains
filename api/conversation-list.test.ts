@@ -29,20 +29,16 @@ async function updatedAtOf(conversationId: number) {
 }
 
 /**
- * Wait until the wall clock is unambiguously in a later second.
+ * Advance past the timestamp resolution.
  *
- * MySQL TIMESTAMP without fractional seconds has one-second resolution AND
- * rounds rather than truncating, so a value written at T.6 lands on T+1 while a
- * `now()` default written at T+1.4 also lands on T+1. Sleeping a flat 1.1 s is
- * therefore not enough — two writes 1.1 s apart can still share a stored
- * second, which made this suite flaky. Crossing two boundaries is
- * unambiguous in either direction.
+ * This used to cross two whole second boundaries, because MySQL TIMESTAMP had
+ * one-second resolution and rounded, so two writes 1.1 s apart could share a
+ * stored second. H-8 widened the columns to `timestamp(3)` with a `now(3)`
+ * default, so a few milliseconds is now genuinely enough — and this suite runs
+ * in a second rather than fifteen.
  */
 async function tick() {
-  const startSecond = Math.floor(Date.now() / 1000);
-  while (Math.floor(Date.now() / 1000) <= startSecond + 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 describeIntegration("conversation recency and unread counts (S-11)", () => {

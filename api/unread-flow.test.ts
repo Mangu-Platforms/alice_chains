@@ -154,9 +154,9 @@ describeIntegration("unread badge flow (F-1)", () => {
     await caller(bob).conversation.markAsRead({ conversationId: conversation });
     expect(await badge(bob)).toBe(0);
 
-    // Past the one-second TIMESTAMP resolution, so the new message is
-    // unambiguously after the read marker.
-    await settle(2100);
+    // Past the timestamp resolution — milliseconds since H-8 — so the new
+    // message is unambiguously after the read marker.
+    await settle(20);
 
     delivered = nextEvent(receiver, "newMessage");
     sender.emit("sendMessage", { conversationId: conversation, content: "second" });

@@ -12,7 +12,20 @@ import {
   foreignKey,
   type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
+import { sql } from "drizzle-orm";
 
+// H-8. Several columns are `timestamp(3)` rather than plain `timestamp`, and
+// their defaults are `now(3)` rather than drizzle's `defaultNow()`. Both halves
+// matter: MySQL stores `.000` into a timestamp(3) column whose default is
+// plain `now()`, so widening the column without widening the default is purely
+// cosmetic — verified against the server rather than assumed.
+// MySQL's TIMESTAMP without a fractional-seconds precision has one-second
+// resolution AND rounds rather than truncating, so two writes 1.1 seconds
+// apart could share a stored second. That made message ordering arbitrary
+// within a second (FR-MSG-11) and, worse, made a message sent in the same
+// second as a read count as already read. Milliseconds are enough: they cost
+// one extra byte per column and remove the whole class of problem.
+//
 // S-3. Until migration 0002 this file declared six tables with 0 foreign keys,
 // 0 secondary indexes and 1 unique constraint, so referential integrity,
 // idempotency and every hot-path lookup were unprotected — and the
@@ -56,9 +69,9 @@ export const conversations = mysqlTable(
     type: mysqlEnum("type", ["direct", "group"]).default("direct").notNull(),
     avatar: text("avatar"),
     createdBy: bigint("createdBy", { mode: "number", unsigned: true }).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt")
-      .defaultNow()
+    createdAt: timestamp("createdAt", { fsp: 3 }).default(sql`(now(3))`).notNull(),
+    updatedAt: timestamp("updatedAt", { fsp: 3 })
+      .default(sql`(now(3))`)
       .notNull()
       .$onUpdate(() => new Date()),
   },
@@ -85,7 +98,7 @@ export const conversationParticipants = mysqlTable(
     conversationId: bigint("conversationId", { mode: "number", unsigned: true }).notNull(),
     userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
     joinedAt: timestamp("joinedAt").defaultNow().notNull(),
-    lastReadAt: timestamp("lastReadAt"),
+    lastReadAt: timestamp("lastReadAt", { fsp: 3 }),
   },
   (t) => [
     uniqueIndex("cp_conversation_user_uq").on(t.conversationId, t.userId), // UQ-1
@@ -126,9 +139,9 @@ export const messages = mysqlTable(
     // retrievable even though the row is.
     deletedAt: timestamp("deletedAt"),
     deletedBy: bigint("deletedBy", { mode: "number", unsigned: true }),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt")
-      .defaultNow()
+    createdAt: timestamp("createdAt", { fsp: 3 }).default(sql`(now(3))`).notNull(),
+    updatedAt: timestamp("updatedAt", { fsp: 3 })
+      .default(sql`(now(3))`)
       .notNull()
       .$onUpdate(() => new Date()),
   },
@@ -182,7 +195,7 @@ export const messageReads = mysqlTable(
     id: serial("id").primaryKey(),
     messageId: bigint("messageId", { mode: "number", unsigned: true }).notNull(),
     userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    readAt: timestamp("readAt").defaultNow().notNull(),
+    readAt: timestamp("readAt", { fsp: 3 }).default(sql`(now(3))`).notNull(),
   },
   (t) => [
     // UQ-2. Its leading column also serves the receipt fetch, so the separately

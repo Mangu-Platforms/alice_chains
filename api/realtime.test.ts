@@ -120,9 +120,9 @@ describeIntegration("realtime message flow (S-7)", () => {
       .from(conversations)
       .where(eq(conversations.id, conversation));
 
-    // MySQL TIMESTAMP has one-second resolution and rounds, so two writes 1.1 s
-    // apart can still share a stored second. Cross two boundaries.
-    await settle(2100);
+    // H-8 widened these columns to millisecond precision, so a short pause is
+    // enough to make the two writes distinguishable.
+    await settle(20);
     const sender = await joined(alice);
     const receiver = await joined(bob);
     const delivered = nextEvent(receiver, "newMessage");
