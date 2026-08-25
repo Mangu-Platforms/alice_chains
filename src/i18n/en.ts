@@ -99,6 +99,21 @@ export const en = {
     n === 1 ? "1 character over the limit" : `${n} characters over the limit`,
   "composer.tooLong": (max: number) =>
     `Messages can be at most ${max} characters.`,
+
+  // ── The media drawer (P-UX-4) ─────────────────────────────────────────
+  "a11y.openMedia": "Files and photos in this conversation",
+  "a11y.showInConversation": (name: string) => `Show ${name} in the conversation`,
+  "a11y.downloadFile": (name: string) => `Download ${name}`,
+  "media.title": "Files and photos",
+  "media.subtitle": "Everything shared in this conversation.",
+  "media.count": (n: number) =>
+    n === 1 ? "1 item shared here" : `${n} items shared here`,
+  "media.images": (n: number) => (n === 1 ? "1 photo" : `${n} photos`),
+  "media.files": (n: number) => (n === 1 ? "1 file" : `${n} files`),
+  "media.empty": "Nothing shared yet",
+  "media.emptyHint": "Photos and files sent in this conversation collect here.",
+  "media.messageNotLoaded":
+    "That message is further back than the part of the conversation loaded here.",
 } as const;
 
 export type MessageKey = keyof typeof en;

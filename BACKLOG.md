@@ -83,7 +83,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **P-UX-1** | Wire or remove every remaining stub; real empty states | P1 | — | ✅ Done |
 | **P-UX-2** | Connection banner and an outbox for sends attempted while disconnected | P1 | — | ✅ Done |
 | **P-UX-3** | Composer — shift+enter, character counter, emoji picker, paste-to-attach | P1 | F-4 | ✅ Done |
-| **P-UX-4** | Thread search and media drawer | P2 | F-4, P-SEARCH-1 | Not started |
+| **P-UX-4** | Thread search and media drawer | P2 | F-4, P-SEARCH-1 | ✅ Done |
 | **P-LINK-1** | Detect URLs, render with `rel=noopener noreferrer`, no unfurling | P2 | — | ✅ Done |
 
 ## Wave 7 — Operator tooling
@@ -115,6 +115,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-20a** | Migrate the remaining display strings in `Chat.tsx` and `Contacts.tsx` into `src/i18n/en.ts`. S-20 established the catalogue and moved everything a screen reader *announces*; the rest is a mechanical sweep best done file by file rather than as one large risky diff | Not started |
 | **H-8** | `messages.createdAt` / `lastReadAt` were `TIMESTAMP` without fractional seconds, and MySQL *rounds* — so a message sent in the same second as a read counted as already read | ✅ Done — widened to `timestamp(3)` with `now(3)` defaults (migration 0008) |
 | **H-7** | `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` are read on the server only — since S-4 the client builds no provider URL — so the `VITE_` prefix is now misleading. Rename to `KIMI_AUTH_URL`/`KIMI_APP_ID` keeping backwards compatibility, alongside the `JWT_SECRET` → `SESSION_SECRET` rename ([ADR-002](docs/ADR.md)) | Not started |
+| **H-9** | The thread renders a fixed most-recent 50 messages with no way to load older ones — `message.listByConversation` takes `limit`/`offset` and the client passes `limit: 50` and never moves. So a conversation longer than 50 messages is silently truncated, and P-UX-4's jump-to-message has to tell the member when a search hit is further back than the loaded window rather than going to it. Found while building P-UX-4 | Not started |
 | **H-6** | `.env.example` ships `NODE_ENV=development`, so a `cp .env.example .env` followed by `npm run build` emits a **development** React bundle — 839 KB instead of 597 KB, with dev warnings shipped to users. Found while verifying S-8. Make `npm run build` force `NODE_ENV=production` | ✅ Done |
 
 ---

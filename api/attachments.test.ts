@@ -377,9 +377,18 @@ describeIntegration("attachments (F-4)", () => {
       attachmentIds: [attachmentId],
     });
 
-    expect(
-      await caller(bob).attachment.listForConversation({ conversationId: conversation })
-    ).toHaveLength(1);
+    const listed = await caller(bob).attachment.listForConversation({
+      conversationId: conversation,
+    });
+    expect(listed).toHaveLength(1);
+
+    // P-UX-4. The drawer jumps to the message an attachment arrived on, so
+    // the id has to come back — and it renders images and files differently,
+    // so `isImage` does too.
+    expect(listed[0].messageId).toEqual(expect.any(Number));
+    expect(listed[0].isImage).toBe(true);
+    expect(listed[0].url).toBeTruthy();
+
     expect(
       await caller(mallory).attachment.listForConversation({ conversationId: conversation })
     ).toEqual([]);

@@ -295,7 +295,11 @@ export const attachmentRouter = createRouter({
       return Promise.all(
         rows.map(async (row) => ({
           id: row.id,
-          messageId: row.messageId,
+          // The inner join above is on `messages.id = attachments.messageId`,
+          // so a row that reached here has one. The column is nullable because
+          // an upload exists before the message that names it does — a state
+          // this query cannot return.
+          messageId: row.messageId as number,
           fileName: row.fileName,
           mimeType: row.mimeType,
           byteSize: row.byteSize,

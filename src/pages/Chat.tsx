@@ -15,6 +15,7 @@ import {
   Users,
   LogOut,
   Send,
+  Images,
   Paperclip,
   Check,
   CheckCheck,
@@ -56,6 +57,7 @@ import { ConnectionBanner } from "@/components/ConnectionBanner";
 import { Outbox, type OutboxEntry } from "@/lib/outbox";
 import { MAX_MESSAGE_LENGTH, MIN_SEARCH_QUERY_LENGTH } from "@contracts/constants";
 import { EmojiPicker } from "@/components/EmojiPicker";
+import { MediaDrawer } from "@/components/MediaDrawer";
 import {
   counterState,
   filesFromClipboard,
@@ -71,6 +73,13 @@ import {
 
 /** Matches `max-h-[120px]` on the composer; the two must agree. */
 const COMPOSER_MAX_HEIGHT = 120;
+
+/**
+ * How long a jumped-to message stays highlighted (P-UX-4). Long enough to
+ * find with the eye after the scroll settles, short enough not to become
+ * part of the page.
+ */
+const JUMP_HIGHLIGHT_MS = 1600;
 
 export default function Chat() {
   const { user, logout } = useAuth();
@@ -103,6 +112,10 @@ export default function Chat() {
   // P-SEARCH. The header's search icon was a stub S-20 removed rather than
   // leave lying; this is what brings it back, live.
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(
+    null
+  );
   const [messageQuery, setMessageQuery] = useState("");
   const [searchEverywhere, setSearchEverywhere] = useState(false);
 
@@ -504,6 +517,48 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── P-UX-4 · going to a message ─────────────────────────────────────────
+  // A jump is queued rather than performed, because the target is often in a
+  // conversation that is not open yet: `selectConversation` changes the query
+  // key, and the messages arrive a round trip later. The effect below fires
+  // once they do — and, being declared after the scroll-to-bottom effect
+  // above, its scroll is the one that lands.
+  const [pendingJumpId, setPendingJumpId] = useState<number | null>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (pendingJumpId === null || !messages) return;
+
+    const node = document.querySelector<HTMLElement>(
+      `[data-message-id="${pendingJumpId}"]`
+    );
+    setPendingJumpId(null);
+
+    if (!node) {
+      // The thread renders the most recent 50 messages, so a hit from further
+      // back is simply not on the page. Saying so beats a click that appears
+      // to do nothing.
+      toast.info(t("media.messageNotLoaded"));
+      return;
+    }
+
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedMessageId(pendingJumpId);
+
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(
+      () => setHighlightedMessageId(null),
+      JUMP_HIGHLIGHT_MS
+    );
+  }, [pendingJumpId, messages]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    },
+    []
+  );
+
   // Handle mobile
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -647,6 +702,14 @@ export default function Chat() {
     setReplyingTo(null);
     setEditingMessageId(null);
     if (isMobile) setSidebarOpen(false);
+  };
+
+  /** Open the conversation a message lives in, then go to the message. */
+  const jumpToMessage = (messageId: number, conversationId?: number) => {
+    if (conversationId !== undefined && conversationId !== activeConversationId) {
+      selectConversation(conversationId);
+    }
+    setPendingJumpId(messageId);
   };
 
   const filteredConversations = conversations?.filter((conv) =>
@@ -980,6 +1043,14 @@ export default function Chat() {
                 >
                   <Search className="w-4 h-4" />
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("a11y.openMedia")}
+                  onClick={() => setMediaOpen(true)}
+                >
+                  <Images className="w-4 h-4" />
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -1131,9 +1202,10 @@ export default function Chat() {
                         <li key={result.id}>
                           <button
                             onClick={() => {
-                              if (result.conversationId !== activeConversationId) {
-                                selectConversation(result.conversationId);
-                              }
+                              // P-UX-4. Previously this opened the
+                              // conversation and left the member to find the
+                              // message they had just searched for.
+                              jumpToMessage(result.id, result.conversationId);
                               setSearchOpen(false);
                             }}
                             className="w-full text-left px-3 py-2 rounded-lg hover:bg-secondary/60 transition-colors"
@@ -1183,9 +1255,17 @@ export default function Chat() {
                   return (
                     <div
                       key={msg.id}
+                      // P-UX-4. The anchor a jump scrolls to. It is on the row
+                      // rather than the bubble so the ring encloses the whole
+                      // message, avatar included.
+                      data-message-id={msg.id}
                       className={`flex ${
                         msg.isMine ? "justify-end" : "justify-start"
-                      } mb-1`}
+                      } mb-1 scroll-mt-4 rounded-xl transition-colors duration-500 ${
+                        highlightedMessageId === msg.id
+                          ? "bg-primary/10 ring-1 ring-primary/40"
+                          : ""
+                      }`}
                     >
                       <div
                         className={`flex items-end gap-2 max-w-[75%] ${
@@ -1680,6 +1760,15 @@ export default function Chat() {
                 </div>
               </DialogContent>
             </Dialog>
+
+            {activeConversationId !== null && (
+              <MediaDrawer
+                conversationId={activeConversationId}
+                open={mediaOpen}
+                onOpenChange={setMediaOpen}
+                onJumpToMessage={(messageId) => jumpToMessage(messageId)}
+              />
+            )}
 
             {/* Message Input */}
             <div className="p-4 border-t border-border">
