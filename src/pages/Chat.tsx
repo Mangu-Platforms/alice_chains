@@ -45,8 +45,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { format } from "date-fns";
 import { toast } from "sonner";
+import { t, formatTime, formatMessageTimestamp } from "@/i18n";
+import { LiveRegion } from "@/components/LiveRegion";
 import { MAX_MESSAGE_LENGTH } from "@contracts/constants";
 import { REACTION_EMOJI } from "@contracts/reactions";
 import {
@@ -79,6 +80,9 @@ export default function Chat() {
   const [editDraft, setEditDraft] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   // F-5. The message the composer is currently replying to, if any.
+  // S-20. What a screen reader should be told about, most recently. Rendered
+  // into a polite live region below.
+  const [announcement, setAnnouncement] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<{
     id: number;
     content: string;
@@ -332,6 +336,11 @@ export default function Chat() {
       if (message.conversationId === activeConversationId) {
         refetchMessages();
         if (message.senderId !== user?.id) {
+          // The DOM changes silently for a screen reader user, so say it.
+          setAnnouncement(
+            t("live.newMessageFrom", conversations?.find((c) => c.id === message.conversationId)
+              ?.participants.find((p) => p.userId === message.senderId)?.userName ?? "someone")
+          );
           // Two writes, two purposes: the receipt drives the sender's read
           // ticks, the read marker drives our own unread badge.
           socket.markAsRead([message.id], message.conversationId);
@@ -484,6 +493,8 @@ export default function Chat() {
 
   const selectConversation = (id: number) => {
     setSearchParams({ c: id.toString() });
+    const opened = conversations?.find((c) => c.id === id);
+    setAnnouncement(t("live.conversationOpened", opened?.displayName ?? ""));
     // A reply target belongs to the conversation it came from; carrying it
     // across would be rejected by the server (FR-MSG-15) and confusing here.
     setReplyingTo(null);
@@ -516,6 +527,7 @@ export default function Chat() {
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
+      <LiveRegion message={announcement} />
       {/* Sidebar */}
       <aside
         className={`${
@@ -536,7 +548,7 @@ export default function Chat() {
               <div>
                 <h1 className="font-bold text-lg leading-tight">Alice Chains</h1>
                 <p className="text-xs text-muted-foreground">
-                  {onlineUsers.size} online
+                  {t("count.onlineNow", onlineUsers.size)}
                 </p>
               </div>
             </div>
@@ -544,6 +556,7 @@ export default function Chat() {
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={t("a11y.closeSidebar")}
                 onClick={() => setSidebarOpen(false)}
               >
                 <X className="w-5 h-5" />
@@ -564,10 +577,19 @@ export default function Chat() {
 
         {/* Conversations List */}
         <ScrollArea className="flex-1">
-          <div className="p-2 space-y-1">
+          {/*
+            S-20. A list of buttons, marked up as a list. Without the roles a
+            screen reader reads eleven unrelated buttons; with them it says
+            "list, eleven items" and offers list navigation. `aria-current`
+            is what tells the reader which conversation is open — the visual
+            highlight alone says nothing.
+          */}
+          <div className="p-2 space-y-1" role="list" aria-label="Conversations">
             {filteredConversations?.map((conv) => (
               <button
                 key={conv.id}
+                role="listitem"
+                aria-current={activeConversationId === conv.id ? "true" : undefined}
                 onClick={() => selectConversation(conv.id)}
                 className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-150 text-left group ${
                   activeConversationId === conv.id
@@ -601,7 +623,7 @@ export default function Chat() {
                     </span>
                     {conv.latestMessage && (
                       <span className="text-[11px] text-muted-foreground flex-shrink-0">
-                        {format(new Date(conv.latestMessage.createdAt), "HH:mm")}
+                        {formatMessageTimestamp(conv.latestMessage.createdAt)}
                       </span>
                     )}
                   </div>
@@ -619,7 +641,7 @@ export default function Chat() {
                               ? "You: "
                               : ""
                           }${conv.latestMessage.content}`
-                        : "No messages yet"}
+                        : t("status.noMessagesYet")}
                     </p>
                     {conv.unreadCount > 0 && (
                       // A bare number means nothing to a screen reader, so the
@@ -627,9 +649,7 @@ export default function Chat() {
                       // the meaning.
                       <span
                         className="flex-shrink-0 min-w-[1.25rem] h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-[11px] font-semibold flex items-center justify-center tabular-nums"
-                        aria-label={`${conv.unreadCount} unread ${
-                          conv.unreadCount === 1 ? "message" : "messages"
-                        }`}
+                        aria-label={t("count.unreadMessages", conv.unreadCount)}
                       >
                         <span aria-hidden="true">
                           {conv.unreadCount > 99 ? "99+" : conv.unreadCount}
@@ -667,7 +687,12 @@ export default function Chat() {
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-9 w-9">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  aria-label={t("a11y.accountMenu")}
+                >
                   <MoreVertical className="w-4 h-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -679,6 +704,26 @@ export default function Chat() {
                   <UserPlus className="w-4 h-4" />
                   Add Contact
                 </DropdownMenuItem>
+                {push.available && (
+                  <DropdownMenuItem
+                    onClick={() => (push.subscribed ? push.disable() : push.enable())}
+                    disabled={push.busy || push.permission === "denied"}
+                    className="gap-2"
+                  >
+                    {push.subscribed ? (
+                      <BellOff className="w-4 h-4" />
+                    ) : (
+                      <Bell className="w-4 h-4" />
+                    )}
+                    {push.permission === "denied"
+                      ? "Notifications blocked"
+                      : push.busy
+                        ? "Working…"
+                        : push.subscribed
+                          ? "Turn off notifications"
+                          : "Turn on notifications"}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onClick={logout} className="gap-2 text-destructive">
                   <LogOut className="w-4 h-4" />
                   Sign Out
@@ -699,6 +744,7 @@ export default function Chat() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={t("a11y.openSidebar")}
                   onClick={() => setSidebarOpen(true)}
                 >
                   <Menu className="w-5 h-5" />
@@ -728,24 +774,26 @@ export default function Chat() {
                         (p) =>
                           p.userId !== user?.id && isUserOnline(p.userId)
                       )
-                      ? "Online"
-                      : "Offline"
-                    : `${activeConversation.participants.length} members`}
+                      ? t("status.online")
+                      : t("status.offline")
+                    : t("count.members", activeConversation.participants.length)}
                 </p>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="hidden sm:flex">
-                  <Phone className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="hidden sm:flex">
-                  <Video className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="icon">
-                  <Search className="w-4 h-4" />
-                </Button>
+                {/*
+                  S-20 / P-UX-1. The phone, video and search icons sat here
+                  doing nothing when pressed. Labelling a control that lies is
+                  worse than removing it — a screen reader would then announce
+                  "Start a voice call" for a button that starts nothing. They
+                  come back when P-CALL-1/2 and P-SEARCH-1 ship.
+                */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={t("a11y.conversationMenu")}
+                    >
                       <MoreVertical className="w-4 h-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -803,7 +851,12 @@ export default function Chat() {
 
             {/* Messages Area */}
             <ScrollArea className="flex-1 px-4">
-              <div className="py-4 space-y-1">
+              {/*
+                A log, not a list: `role="log"` tells a screen reader that
+                entries are appended over time, which is what makes its
+                "read new entries" behaviour work.
+              */}
+              <div className="py-4 space-y-1" role="log" aria-label="Messages">
                 {messages?.map((msg, i) => {
                   const showAvatar =
                     !msg.isMine &&
@@ -860,7 +913,7 @@ export default function Chat() {
                             </div>
                           )}
                           {msg.deletedAt ? (
-                            <p className="italic opacity-60">Message deleted</p>
+                            <p className="italic opacity-60">{t("status.messageDeleted")}</p>
                           ) : editingMessageId === msg.id ? (
                             <div className="space-y-2">
                               <Input
@@ -874,7 +927,7 @@ export default function Chat() {
                                   if (e.key === "Escape") cancelEditing();
                                 }}
                                 maxLength={MAX_MESSAGE_LENGTH}
-                                aria-label="Edit message"
+                                aria-label={t("a11y.editMessage")}
                                 autoFocus
                                 className="h-8 bg-background/40 border-0"
                               />
@@ -910,10 +963,12 @@ export default function Chat() {
                             }`}
                           >
                             <span className="text-[10px] opacity-60">
-                              {format(new Date(msg.createdAt), "HH:mm")}
+                              {formatTime(msg.createdAt)}
                             </span>
                             {msg.isEdited && !msg.deletedAt && (
-                              <span className="text-[10px] opacity-60">edited</span>
+                              <span className="text-[10px] opacity-60">
+                                {t("status.edited")}
+                              </span>
                             )}
                             {msg.isMine && !msg.deletedAt && (
                               <span className="opacity-60">
@@ -936,7 +991,7 @@ export default function Chat() {
                                   })
                                 }
                                 className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
-                                aria-label="Reply to this message"
+                                aria-label={t("a11y.replyToMessage")}
                               >
                                 <Reply className="w-3 h-3" />
                               </button>
@@ -946,7 +1001,7 @@ export default function Chat() {
                                 <DropdownMenuTrigger asChild>
                                   <button
                                     className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
-                                    aria-label="Add a reaction"
+                                    aria-label={t("a11y.addReaction")}
                                   >
                                     <SmilePlus className="w-3 h-3" />
                                   </button>
@@ -962,7 +1017,7 @@ export default function Chat() {
                                         react.mutate({ messageId: msg.id, emoji })
                                       }
                                       className="text-lg leading-none p-1.5 rounded-md hover:bg-secondary transition-colors"
-                                      aria-label={`React with ${emoji}`}
+                                      aria-label={t("a11y.reactWith", emoji)}
                                     >
                                       {emoji}
                                     </button>
@@ -977,7 +1032,7 @@ export default function Chat() {
                                   <DropdownMenuTrigger asChild>
                                     <button
                                       className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus:opacity-100 transition-opacity ml-1"
-                                      aria-label="Message actions"
+                                      aria-label={t("a11y.messageActions")}
                                     >
                                       <MoreVertical className="w-3 h-3" />
                                     </button>
@@ -1060,9 +1115,12 @@ export default function Chat() {
                                       : "bg-background/30 border-border/50 hover:bg-background/50"
                                   }`}
                                   aria-pressed={reaction.mine}
-                                  aria-label={`${reaction.emoji}, ${reaction.count} ${
-                                    reaction.count === 1 ? "reaction" : "reactions"
-                                  }${reaction.mine ? ", including yours" : ""}`}
+                                  aria-label={t(
+                                    "count.reactions",
+                                    reaction.emoji,
+                                    reaction.count,
+                                    reaction.mine
+                                  )}
                                 >
                                   <span aria-hidden="true">{reaction.emoji}</span>
                                   <span aria-hidden="true" className="tabular-nums">
@@ -1192,7 +1250,7 @@ export default function Chat() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-7 w-7 text-destructive"
-                                  aria-label={`Remove ${p.userName || "member"}`}
+                                  aria-label={t("a11y.removeMember", p.userName || "member")}
                                   onClick={() =>
                                     activeConversationId &&
                                     removeParticipant.mutate({
@@ -1291,7 +1349,7 @@ export default function Chat() {
                   </div>
                   <button
                     onClick={() => setReplyingTo(null)}
-                    aria-label="Cancel reply"
+                    aria-label={t("a11y.cancelReply")}
                     className="flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <X className="w-4 h-4" />
@@ -1312,7 +1370,7 @@ export default function Chat() {
                   className="flex-shrink-0"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
-                  aria-label={uploading ? "Uploading" : "Attach a file"}
+                  aria-label={uploading ? t("a11y.uploading") : t("a11y.attachFile")}
                 >
                   {uploading ? (
                     <Spinner className="w-5 h-5" />
@@ -1351,6 +1409,7 @@ export default function Chat() {
                 <Button
                   onClick={handleSendMessage}
                   disabled={!messageInput.trim()}
+                  aria-label={t("a11y.sendMessage")}
                   size="icon"
                   className="flex-shrink-0 rounded-xl h-11 w-11"
                 >

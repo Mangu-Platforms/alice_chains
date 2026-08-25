@@ -19,10 +19,11 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
-    "validate": "npm run typecheck && npm test && npm run lint && npm run build && npm run check:bundle",
+    "validate": "npm run typecheck && npm test && npm run lint && npm run check:a11y && npm run build && npm run check:bundle",
     "db:verify-migration": "node scripts/verify-constraint-migration.mjs",
     "generate-vapid": "node scripts/generate-vapid.mjs",
-    "check:bundle": "node scripts/check-bundle-size.mjs"
+    "check:bundle": "node scripts/check-bundle-size.mjs",
+    "check:a11y": "node scripts/check-a11y-labels.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.8",

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
+import { t } from "@/i18n";
 import { MIN_USER_SEARCH_LENGTH } from "@contracts/constants";
 import {
   ArrowLeft,
@@ -98,7 +99,12 @@ export default function Contacts() {
     <div className="h-screen w-full bg-background flex flex-col">
       {/* Header */}
       <header className="flex items-center gap-4 px-4 py-3 border-b border-border bg-card/30">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t("a11y.back")}
+          onClick={() => navigate("/")}
+        >
           <ArrowLeft className="w-5 h-5" />
         </Button>
         <div className="flex items-center gap-3 flex-1">
@@ -121,7 +127,7 @@ export default function Contacts() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   placeholder="Search by name or email..."
-                  aria-label="Search for a user by name or email address"
+                  aria-label={t("a11y.searchUsers")}
                   className="pl-9"
                   value={searchUserQuery}
                   onChange={(e) => setSearchUserQuery(e.target.value)}
@@ -154,12 +160,18 @@ export default function Contacts() {
                           </p>
                         </div>
                         {isContact ? (
-                          <Button variant="ghost" size="sm" disabled>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled
+                            aria-label={`${foundUser.name} is already a contact`}
+                          >
                             <UserCheck className="w-4 h-4" />
                           </Button>
                         ) : (
                           <Button
                             size="sm"
+                            aria-label={`Send a contact request to ${foundUser.name}`}
                             onClick={() =>
                               addContactMutation.mutate({
                                 contactUserId: foundUser.id,
@@ -287,6 +299,10 @@ export default function Contacts() {
                         variant="ghost"
                         size="icon"
                         className="h-9 w-9"
+                        aria-label={t(
+                          "a11y.messageContact",
+                          contact.contactName || "this contact"
+                        )}
                         onClick={() =>
                           handleStartChat(contact.contactUserId)
                         }
@@ -298,6 +314,10 @@ export default function Contacts() {
                         variant="ghost"
                         size="icon"
                         className="h-9 w-9"
+                        aria-label={t(
+                          "a11y.removeContact",
+                          contact.contactName || "this contact"
+                        )}
                         onClick={() =>
                           removeContactMutation.mutate({
                             contactUserId: contact.contactUserId,
@@ -359,6 +379,10 @@ export default function Contacts() {
                       variant="ghost"
                       size="icon"
                       className="h-9 w-9"
+                      aria-label={t(
+                        "a11y.declineRequest",
+                        request.contactName || "this person"
+                      )}
                       onClick={() =>
                         removeContactMutation.mutate({
                           contactUserId: request.userId,

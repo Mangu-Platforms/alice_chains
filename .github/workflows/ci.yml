@@ -86,6 +86,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # S-20. An icon-only control with no accessible name is announced as
+      # "button" and nothing else. Cheap to check, easy to reintroduce.
+      - name: Check accessible names
+        run: npm run check:a11y
+
       - name: Build
         run: npm run build
 
