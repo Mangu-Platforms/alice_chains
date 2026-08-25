@@ -24,7 +24,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
 | **S-8** | Authorize `message.markAsRead` on both the tRPC and socket paths; extract one `assertParticipant` helper — **CRITICAL** | P0 | — | ✅ Done |
-| **S-9** | Validate participant ids on conversation creation, enforce blocking, cap group size, fix the `createDirect` idempotency bug | P0 | — (must ship before or with S-3) | Not started |
+| **S-9** | Validate participant ids on conversation creation, enforce blocking, cap group size, fix the `createDirect` idempotency bug | P0 | — (must ship before or with S-3) | ✅ Done |
 | **S-10** | Close the directory-enumeration leak (`contact.searchUsers`) and the presence broadcast leak | P0 | — | Not started |
 | **S-4** | OAuth coherence: origin-only `VITE_KIMI_AUTH_URL`, `PUBLIC_BASE_URL` for both `redirect_uri` legs, `state`, PKCE S256 | P0 | — | Not started |
 | **S-5** | Fix read receipts (`inArray` instead of interpolated `IN (?)`) and message-router query hygiene | P0 | — | Not started |

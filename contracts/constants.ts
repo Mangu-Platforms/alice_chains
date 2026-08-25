@@ -25,3 +25,10 @@ export const DEFAULT_PROD_PORT = 3000;
  * an unbounded id list.
  */
 export const MAX_READ_RECEIPT_BATCH = 500;
+
+/**
+ * Largest number of members one conversation may hold, the creator included.
+ * `conversation.createGroup` accepted an unbounded `participantIds` array
+ * before S-9, so a single call could write an arbitrary number of rows.
+ */
+export const MAX_CONVERSATION_PARTICIPANTS = 256;

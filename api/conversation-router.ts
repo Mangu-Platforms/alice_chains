@@ -1,13 +1,23 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { eq, and, desc, inArray } from "drizzle-orm";
+import { alias } from "drizzle-orm/mysql-core";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { assertNotBlocked, assertUsersExist, isParticipant } from "./lib/authz";
+import { MAX_CONVERSATION_PARTICIPANTS } from "@contracts/constants";
 import {
   conversations,
   conversationParticipants,
   messages,
   users,
 } from "@db/schema";
+
+/**
+ * `conversation_participants` is joined twice in `createDirect` — once for the
+ * caller, once for the other member — so the second reference needs an alias.
+ */
+const otherMember = alias(conversationParticipants, "otherMember");
 
 export const conversationRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -109,19 +119,7 @@ export const conversationRouter = createRouter({
       const db = getDb();
       const userId = ctx.user.id;
 
-      // Verify user is participant
-      const [participant] = await db
-        .select()
-        .from(conversationParticipants)
-        .where(
-          and(
-            eq(conversationParticipants.conversationId, input.id),
-            eq(conversationParticipants.userId, userId)
-          )
-        )
-        .limit(1);
-
-      if (!participant) return null;
+      if (!(await isParticipant(userId, input.id, db))) return null;
 
       const [conv] = await db
         .select()
@@ -158,45 +156,59 @@ export const conversationRouter = createRouter({
     }),
 
   createDirect: authedQuery
-    .input(z.object({ otherUserId: z.number() }))
+    .input(z.object({ otherUserId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const userId = ctx.user.id;
 
-      // Check if direct conversation already exists
-      const existingParticipants = await db
-        .select({
-          conversationId: conversationParticipants.conversationId,
-          userId: conversationParticipants.userId,
-        })
-        .from(conversationParticipants)
-        .where(
-          inArray(conversationParticipants.userId, [userId, input.otherUserId])
-        );
+      if (input.otherUserId === userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot open a direct conversation with yourself",
+        });
+      }
 
-      const convIds1 = existingParticipants
-        .filter((p) => p.userId === userId)
-        .map((p) => p.conversationId);
-      const convIds2 = existingParticipants
-        .filter((p) => p.userId === input.otherUserId)
-        .map((p) => p.conversationId);
+      // S-9. The id used to be written straight into conversation_participants
+      // with no existence check, and a user who had blocked the caller could
+      // still be pulled into a conversation with them.
+      await assertUsersExist([input.otherUserId], db);
+      await assertNotBlocked(userId, [input.otherUserId], db);
 
-      const commonConvId = convIds1.find((id) => convIds2.includes(id));
-      if (commonConvId) {
+      // S-9. The old lookup collected every conversation the two share, took
+      // the *first* of them, and only then filtered on type='direct'. When the
+      // pair also shared a group and that group sorted first, the filter missed
+      // and a duplicate DM was created on every call. Filtering inside the
+      // query makes the lookup idempotent.
+      const [existing] = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .innerJoin(
+          conversationParticipants,
+          and(
+            eq(conversationParticipants.conversationId, conversations.id),
+            eq(conversationParticipants.userId, userId)
+          )
+        )
+        .innerJoin(
+          otherMember,
+          and(
+            eq(otherMember.conversationId, conversations.id),
+            eq(otherMember.userId, input.otherUserId)
+          )
+        )
+        .where(eq(conversations.type, "direct"))
+        .orderBy(conversations.id)
+        .limit(1);
+
+      if (existing) {
         const [conv] = await db
           .select()
           .from(conversations)
-          .where(
-            and(
-              eq(conversations.id, commonConvId),
-              eq(conversations.type, "direct")
-            )
-          )
+          .where(eq(conversations.id, existing.id))
           .limit(1);
         if (conv) return conv;
       }
 
-      // Create new direct conversation
       const [newConv] = await db.insert(conversations).values({
         type: "direct",
         createdBy: userId,
@@ -209,19 +221,44 @@ export const conversationRouter = createRouter({
         { conversationId: convId, userId: input.otherUserId },
       ]);
 
-      return { id: convId, type: "direct" as const, createdBy: userId };
+      const [created] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, convId))
+        .limit(1);
+
+      return created;
     }),
 
   createGroup: authedQuery
     .input(
       z.object({
-        name: z.string().min(1).max(100),
-        participantIds: z.array(z.number()).min(1),
+        name: z.string().trim().min(1).max(100),
+        participantIds: z
+          .array(z.number().int().positive())
+          .min(1)
+          // The creator is always a member, so the array itself may hold at
+          // most one fewer than the conversation cap.
+          .max(MAX_CONVERSATION_PARTICIPANTS - 1),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const userId = ctx.user.id;
+
+      const invited = [...new Set(input.participantIds)].filter((id) => id !== userId);
+      if (invited.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "A group needs at least one other member",
+        });
+      }
+
+      // S-9. Every id was previously written verbatim: unknown ids became
+      // orphan rows, and a user who had blocked the caller could be added to a
+      // group by them and then messaged.
+      await assertUsersExist(invited, db);
+      await assertNotBlocked(userId, invited, db);
 
       const [newConv] = await db.insert(conversations).values({
         name: input.name,
@@ -231,7 +268,7 @@ export const conversationRouter = createRouter({
 
       const convId = Number(newConv.insertId);
 
-      const allParticipantIds = [...new Set([userId, ...input.participantIds])];
+      const allParticipantIds = [userId, ...invited];
       await db.insert(conversationParticipants).values(
         allParticipantIds.map((id) => ({
           conversationId: convId,
