@@ -47,12 +47,14 @@ docker compose up             # app on http://localhost:3000
 | `npm run dev` | Vite client on :3000 + API on :3001, both watching |
 | `npm run build` | typecheck, build the client to `dist/public`, bundle the server to `dist/boot.js` |
 | `npm start` | run the production build (single process, serves client + API) |
-| `npm run validate` | **the gate** — typecheck → test → lint → build |
+| `npm run validate` | **the gate** — typecheck → test → lint → build → bundle budget |
 | `npm test` | Vitest |
 | `npm run db:generate` | emit a migration from `db/schema.ts` |
 | `npm run db:migrate` | apply pending migrations (canonical) |
 | `npm run db:push` | sync schema without a migration — **scratch development only** |
 | `npm run db:studio` | Drizzle Studio |
+| `npm run check:bundle` | assert the initial JS payload against the NFR-PERF-06 budget |
+| `npm run generate-vapid` | generate a VAPID key pair for web push |
 | `npm run db:verify-migration` | prove the constraint migration against a deliberately dirty scratch database — dedupe, orphan handling, and the abort on a RESTRICT orphan |
 
 ## Configuration

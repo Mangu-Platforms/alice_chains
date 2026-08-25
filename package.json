@@ -19,9 +19,10 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
-    "validate": "npm run typecheck && npm test && npm run lint && npm run build",
+    "validate": "npm run typecheck && npm test && npm run lint && npm run build && npm run check:bundle",
     "db:verify-migration": "node scripts/verify-constraint-migration.mjs",
-    "generate-vapid": "node scripts/generate-vapid.mjs"
+    "generate-vapid": "node scripts/generate-vapid.mjs",
+    "check:bundle": "node scripts/check-bundle-size.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.8",

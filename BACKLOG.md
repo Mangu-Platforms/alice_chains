@@ -65,7 +65,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-13** | Rate limiting per [SECURITY.md §8](docs/SECURITY.md) — login/callback, message send (socket *and* tRPC), contact requests, search, upload | P1 | S-7 | ✅ Done |
 | **S-14** | Runtime validation of socket payloads with shared Zod schemas in `contracts/`; enforce the 4000-char cap on the socket path | P1 | S-7 | ✅ Done |
 | **S-15** | Observability per [TECH_SPEC.md §10](docs/TECH_SPEC.md) — structured logs with redaction, `/healthz` + `/readyz`, RED metrics | P1 | — | ✅ Done |
-| **S-16** | Client code-splitting plus a CI bundle-size gate (NFR-PERF-06 — the budget is met today at 177.5 KiB gzipped; the gate is what is missing) | P1 | — | Not started |
+| **S-16** | Client code-splitting plus a CI bundle-size gate (NFR-PERF-06) | P1 | — | ✅ Done — 172.6 KB gzipped, 31% headroom |
 | **S-18** | Owner/admin capability and data rights — bind `OWNER_UNION_ID` to `users.role` (`getOwnerUnionId()` has zero call sites today), `adminQuery` builder, member list, deactivation, audit record, data export and erasure, narrowed `auth.me` | P1 | S-3, S-17 | Not started |
 | **S-20** | Accessibility and internationalisation baseline — WCAG 2.2 AA audit and fixes, keyboard operation and focus management in the chat list, `aria-live` announcements, message catalogue and locale-aware timestamps | P1 | — | Not started |
 | **S-19** | Horizontal scale readiness — Socket.IO Redis adapter and Redis-backed presence behind `REDIS_URL`, capped TLS pool, two-node proof | P2 | S-15 | **Gated** — build only when the [ADR-006](docs/ADR.md) trigger fires: `socket_connections_active` > 6 000 per node for 15 min on 3 days in 14 |

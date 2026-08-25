@@ -89,6 +89,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      # S-16 / NFR-PERF-06. The budget is on what a first-time visitor must
+      # download before anything renders. Without this gate every new
+      # dependency lands on the critical path unnoticed — which is exactly what
+      # happened across Waves 4 and 5.
+      - name: Check the bundle budget
+        run: npm run check:bundle
+
       # Covers what the suite cannot: the constraint migration's dedupe and
       # orphan handling, against a deliberately dirty scratch database.
       - name: Verify the constraint migration
