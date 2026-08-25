@@ -27,6 +27,9 @@ interface ServerToClientEvents {
   }) => void;
   /** F-2. Emitted by the server after a tRPC soft delete. */
   messageDeleted: (data: { id: number; conversationId: number }) => void;
+  /** S-13. The server refused a frame; the member should be told, not left
+   *  wondering why their message vanished. */
+  rateLimited: (data: { event: string; retryAfterMs: number }) => void;
   /** F-3. The full reaction summary for one message, after a toggle. */
   reactionUpdated: (data: {
     messageId: number;

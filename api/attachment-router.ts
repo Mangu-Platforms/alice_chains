@@ -14,7 +14,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, isNull, lt } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, rateLimited } from "./middleware";
+import { Limits } from "./lib/rate-limit";
 import { getDb } from "./queries/connection";
 import { attachments, messages } from "@db/schema";
 import { assertParticipant, isParticipant } from "./lib/authz";
@@ -163,7 +164,7 @@ export async function reapAbandonedUploads(now = new Date()): Promise<number> {
 }
 
 export const attachmentRouter = createRouter({
-  createUpload: authedQuery
+  createUpload: rateLimited("attachment.createUpload", Limits.uploadInit)
     .input(
       z.object({
         conversationId: z.number().int().positive(),

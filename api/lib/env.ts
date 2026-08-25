@@ -50,6 +50,14 @@ const envSchema = z.object({
   // it is the default: `npm run dev` and `docker compose up` both give a
   // working attachment flow out of the box. "s3" talks to MinIO or S3 and is
   // what a multi-node deployment must use, since local files live on one disk.
+  // Whether X-Forwarded-For may be believed. Off by default: a client can set
+  // that header freely, so trusting it without a proxy in front lets anyone
+  // choose their own rate-limit bucket.
+  TRUST_PROXY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
   STORAGE_DRIVER: z.enum(["local", "s3"]).default("local"),
   STORAGE_LOCAL_DIR: z.string().default("./storage"),
   S3_ENDPOINT: z.string().optional(),

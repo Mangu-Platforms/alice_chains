@@ -16,9 +16,18 @@ import {
   relatedUserIds,
 } from "./lib/authz";
 import { MAX_READ_RECEIPT_BATCH, SOCKET_SESSION_RECHECK_MS } from "@contracts/constants";
+import {
+  consume,
+  Limits,
+  SOCKET_CONNECTION_LIMITS,
+  startRateLimitSweep,
+} from "./lib/rate-limit";
 
 let io: SocketIOServer | null = null;
 let sessionRecheckTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Concurrent sockets per remote address, for the S-13 handshake cap. */
+const connectionsByIp = new Map<string, number>();
 
 // Track online users
 const onlineUsers = new Map<number, Set<string>>();
@@ -80,6 +89,13 @@ export function initSocket(server: HttpServer) {
       credentials: true,
     },
     path: "/socket.io",
+    // SEC-C-14. A frame larger than this is refused by the transport, before
+    // any handler sees it. The 4000-character message cap is enforced in
+    // S-14's payload schemas; this is the floor beneath it.
+    maxHttpBufferSize: 128 * 1024,
+    // Drop a connection that stops answering rather than holding it open.
+    pingTimeout: 20_000,
+    pingInterval: 25_000,
   });
 
   io.use(async (socket, next) => {
@@ -94,8 +110,23 @@ export function initSocket(server: HttpServer) {
     // to be authorized once at handshake and then trusted for its whole life,
     // so a session revoked at logout left every open socket alive (SEC-C-29).
     socket.data.sessionToken = getSessionToken(headers);
+
+    // S-13 / SEC-C-14. Concurrent connection caps, checked at the handshake.
+    // Without them one client can open sockets until the process runs out of
+    // file descriptors, and the per-user Set below grows without bound.
+    const address = socket.handshake.address;
+    if ((onlineUsers.get(user.id)?.size ?? 0) >= SOCKET_CONNECTION_LIMITS.perUser) {
+      return next(new Error("Too many connections for this account"));
+    }
+    if ((connectionsByIp.get(address) ?? 0) >= SOCKET_CONNECTION_LIMITS.perIp) {
+      return next(new Error("Too many connections from this address"));
+    }
+
+    socket.data.address = address;
     next();
   });
+
+  startRateLimitSweep();
 
   sessionRecheckTimer = setInterval(() => {
     void revalidateSockets(io!);
@@ -112,6 +143,9 @@ export function initSocket(server: HttpServer) {
     sockets.add(socket.id);
     onlineUsers.set(userId, sockets);
     socket.join(`user_${userId}`);
+
+    const address = (socket.data.address as string) ?? socket.handshake.address;
+    connectionsByIp.set(address, (connectionsByIp.get(address) ?? 0) + 1);
 
     // S-10. Presence was `socket.broadcast.emit`, so every signed-in member
     // learned every other member's online state, and each new socket was handed
@@ -140,6 +174,9 @@ export function initSocket(server: HttpServer) {
 
     // Join a conversation room
     socket.on("joinConversation", async ({ conversationId }: { conversationId: number }) => {
+      // Silent drop: joining is idempotent and a refused join is not something
+      // a member did wrong.
+      if (!consume("socket.join", userId, Limits.joinConversation).allowed) return;
       if (await isMember(conversationId)) socket.join(`conv_${conversationId}`);
     });
 
@@ -162,6 +199,23 @@ export function initSocket(server: HttpServer) {
         try {
           const userId = socket.data.userId;
           if (!userId) return;
+
+          // S-13. Two buckets: one bounds a member's total send rate, the
+          // other stops one conversation being flooded. Unlike typing, a
+          // refused send is reported — the member needs to know it did not go.
+          const perUser = consume("socket.send", userId, Limits.messageSendPerUser);
+          const perConversation = consume(
+            "socket.send.conv",
+            `${userId}:${data.conversationId}`,
+            Limits.messageSendPerConversation
+          );
+          if (!perUser.allowed || !perConversation.allowed) {
+            socket.emit("rateLimited", {
+              event: "sendMessage",
+              retryAfterMs: Math.max(perUser.retryAfterMs, perConversation.retryAfterMs),
+            });
+            return;
+          }
 
           if (!(await isMember(data.conversationId))) return;
 
@@ -272,6 +326,8 @@ export function initSocket(server: HttpServer) {
             ...new Set(requested.filter((id) => Number.isInteger(id) && id > 0)),
           ];
           if (!messageIds.length || messageIds.length > MAX_READ_RECEIPT_BATCH) return;
+          // Silent drop: receipts are best-effort and a missed one costs a tick.
+          if (!consume("socket.read", userId, Limits.markAsRead).allowed) return;
           if (!Number.isInteger(data?.conversationId)) return;
 
           if (!(await isMember(data.conversationId))) return;
@@ -306,6 +362,14 @@ export function initSocket(server: HttpServer) {
       "typing",
       async (data: { conversationId: number; isTyping: boolean }) => {
         if (!Number.isInteger(data?.conversationId)) return;
+        // Silent drop, never an error: typing is cosmetic, and telling someone
+        // their keystroke was rate-limited is worse than dropping it.
+        if (
+          !consume("socket.typing", `${userId}:${data.conversationId}`, Limits.typing)
+            .allowed
+        ) {
+          return;
+        }
         if (!(await isMember(data.conversationId))) return;
 
         // F-8. Emitting to the conversation room would reach a member who has
@@ -335,6 +399,10 @@ export function initSocket(server: HttpServer) {
 
     // Disconnect
     socket.on("disconnect", () => {
+      const remaining = (connectionsByIp.get(address) ?? 1) - 1;
+      if (remaining > 0) connectionsByIp.set(address, remaining);
+      else connectionsByIp.delete(address);
+
       const userSockets = onlineUsers.get(userId);
       userSockets?.delete(socket.id);
 

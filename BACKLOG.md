@@ -62,7 +62,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | ID | Title | Pri | Depends on | Status |
 |---|---|---|---|---|
 | **S-6** | Docker stack — `docker compose up` from a clean checkout, image < 400 MB | P1 | — | ✅ Built; awaiting a live `docker compose up` verification run |
-| **S-13** | Rate limiting per [SECURITY.md §8](docs/SECURITY.md) — login/callback, message send (socket *and* tRPC), contact requests, search, upload | P1 | S-7 | Not started |
+| **S-13** | Rate limiting per [SECURITY.md §8](docs/SECURITY.md) — login/callback, message send (socket *and* tRPC), contact requests, search, upload | P1 | S-7 | ✅ Done |
 | **S-14** | Runtime validation of socket payloads with shared Zod schemas in `contracts/`; enforce the 4000-char cap on the socket path | P1 | S-7 | Not started |
 | **S-15** | Observability per [TECH_SPEC.md §10](docs/TECH_SPEC.md) — structured logs with redaction, `/healthz` + `/readyz`, RED metrics | P1 | — | Not started |
 | **S-16** | Client code-splitting plus a CI bundle-size gate (NFR-PERF-06 — the budget is met today at 177.5 KiB gzipped; the gate is what is missing) | P1 | — | Not started |

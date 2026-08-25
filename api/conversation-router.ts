@@ -2,7 +2,8 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, rateLimited } from "./middleware";
+import { Limits } from "./lib/rate-limit";
 import { getDb } from "./queries/connection";
 import {
   assertNotBlocked,
@@ -244,7 +245,7 @@ export const conversationRouter = createRouter({
       };
     }),
 
-  createDirect: authedQuery
+  createDirect: rateLimited("conversation.createDirect", Limits.createDirect)
     .input(z.object({ otherUserId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
@@ -319,7 +320,7 @@ export const conversationRouter = createRouter({
       return created;
     }),
 
-  createGroup: authedQuery
+  createGroup: rateLimited("conversation.createGroup", Limits.createGroup)
     .input(
       z.object({
         name: z.string().trim().min(1).max(100),

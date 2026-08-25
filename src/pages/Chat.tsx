@@ -361,6 +361,14 @@ export default function Chat() {
       // The sidebar preview may have been that message.
       refetchConversations();
     });
+    // S-13. A refused send is silent on the wire; without this the composer
+    // clears and the message simply never appears.
+    const cleanupRateLimited = socket.socket?.on("rateLimited", (data: { retryAfterMs: number }) => {
+      toast.error(
+        `You are sending too fast. Try again in ${Math.ceil(data.retryAfterMs / 1000)}s.`
+      );
+    });
+    void cleanupRateLimited;
     const cleanupReaction = socket.onReactionUpdated((data) => {
       if (data.conversationId === activeConversationId) refetchMessages();
     });
@@ -368,6 +376,7 @@ export default function Chat() {
       cleanupUpdated();
       cleanupDeleted();
       cleanupReaction();
+      socket.socket?.off("rateLimited");
     };
   }, [activeConversationId, socket, refetchMessages, refetchConversations]);
 

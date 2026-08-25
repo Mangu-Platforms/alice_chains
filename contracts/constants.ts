@@ -79,3 +79,10 @@ export const CONVERSATION_LIST_LIMIT = 50;
  * the socket path — which is the one the UI actually uses — to the same cap.
  */
 export const MAX_MESSAGE_LENGTH = 4000;
+
+/**
+ * Largest JSON request body accepted. Was 50 MB, which let any caller buffer
+ * 50 MB before a handler ran; no procedure this app exposes needs more than a
+ * few kilobytes, and attachments never travel this path.
+ */
+export const MAX_JSON_BODY_BYTES = 256 * 1024;

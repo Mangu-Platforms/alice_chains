@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, rateLimited } from "./middleware";
+import { Limits } from "./lib/rate-limit";
 import { getDb } from "./queries/connection";
 import { insertMessage } from "./queries/messages";
 import { TRPCError } from "@trpc/server";
@@ -207,7 +208,7 @@ export const messageRouter = createRouter({
       }));
     }),
 
-  send: authedQuery
+  send: rateLimited("message.send", Limits.messageSendPerUser)
     .input(
       z.object({
         conversationId: z.number(),

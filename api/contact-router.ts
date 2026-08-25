@@ -6,7 +6,8 @@ import { assertNotBlocked, assertUsersExist, blockedWith } from "./lib/authz";
 
 /** Second reference to `contacts`, for the "is this pair blocked" subquery. */
 const blocking = alias(contacts, "blocking");
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, rateLimited } from "./middleware";
+import { Limits } from "./lib/rate-limit";
 import { getDb } from "./queries/connection";
 import { contacts, users } from "@db/schema";
 import { MIN_USER_SEARCH_LENGTH, USER_SEARCH_LIMIT } from "@contracts/constants";
@@ -111,7 +112,7 @@ export const contactRouter = createRouter({
     return rows;
   }),
 
-  add: authedQuery
+  add: rateLimited("contact.add", Limits.contactAdd)
     .input(z.object({ contactUserId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
@@ -299,7 +300,9 @@ export const contactRouter = createRouter({
       .where(and(eq(contacts.userId, ctx.user.id), eq(contacts.status, "blocked")));
   }),
 
-  searchUsers: authedQuery
+  // Two buckets: one stops a tight loop, the other a slow crawl of the
+  // directory over a day. Both must allow the call.
+  searchUsers: rateLimited("contact.search", Limits.searchBurst, Limits.searchDaily)
     .input(
       z.object({
         // S-10. A one-character query returned every matching user together

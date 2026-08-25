@@ -12,6 +12,7 @@ import { decodeSessionToken, revokeSession } from "./kimi/session";
 import { createOAuthCallbackHandler, createOAuthLoginHandler } from "./kimi/auth";
 import { OAUTH_CALLBACK_PATH, OAUTH_LOGIN_PATH } from "@contracts/oauth";
 import { initSocket } from "./socket";
+import { consume, Limits, startRateLimitSweep } from "./lib/rate-limit";
 import { Readable } from "node:stream";
 import {
   readLocalObject,
@@ -20,13 +21,50 @@ import {
 } from "./lib/storage/local";
 import { sanitizeFileName } from "./lib/storage";
 import { MAX_ATTACHMENT_BYTES } from "@contracts/attachments";
+import { MAX_JSON_BODY_BYTES } from "@contracts/constants";
 import { API_PORT, DEFAULT_PROD_PORT } from "@contracts/constants";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
-app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
-app.get(OAUTH_LOGIN_PATH, createOAuthLoginHandler());
-app.get(OAUTH_CALLBACK_PATH, createOAuthCallbackHandler());
+// SEC-C-20. Was 50 MB, which let any request buffer 50 MB of memory before a
+// single handler ran. No JSON endpoint this app serves needs more than a few
+// kilobytes; attachments bypass this entirely by going straight to storage,
+// and their own upload endpoint has its own cap.
+app.use("/api/trpc/*", bodyLimit({ maxSize: MAX_JSON_BODY_BYTES }));
+app.use("/api/files/upload", bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES }));
+/**
+ * S-13. The unauthenticated paths are keyed by IP, because there is no session
+ * yet. `X-Forwarded-For` is honoured only when a proxy is configured, since a
+ * client can set it freely and would otherwise choose its own bucket.
+ */
+function clientAddress(c: { req: { raw: Request; header: (n: string) => string | undefined } }) {
+  if (env.TRUST_PROXY) {
+    const forwarded = c.req.header("x-forwarded-for");
+    if (forwarded) return forwarded.split(",")[0].trim();
+  }
+  return c.req.header("cf-connecting-ip") ?? "unknown";
+}
+
+function tooManyRequests(retryAfterMs: number) {
+  return new Response(JSON.stringify({ error: "Too many requests" }), {
+    status: 429,
+    headers: {
+      "Content-Type": "application/json",
+      "Retry-After": String(Math.ceil(retryAfterMs / 1000)),
+    },
+  });
+}
+
+app.get(OAUTH_LOGIN_PATH, (c) => {
+  const limit = consume("oauth.login", clientAddress(c), Limits.oauthLogin);
+  if (!limit.allowed) return tooManyRequests(limit.retryAfterMs);
+  return createOAuthLoginHandler()(c);
+});
+app.get(OAUTH_CALLBACK_PATH, async (c) => {
+  const limit = consume("oauth.callback", clientAddress(c), Limits.oauthCallback);
+  if (!limit.allowed) return tooManyRequests(limit.retryAfterMs);
+  return createOAuthCallbackHandler()(c);
+});
 /**
  * Logout revokes the server-side session BEFORE clearing the cookie, so a copy
  * of the cookie taken beforehand is dead everywhere — not merely absent from
@@ -132,6 +170,8 @@ export default app;
  * Tests never bind a port.
  */
 if (env.NODE_ENV !== "test") {
+  startRateLimitSweep();
+
   const isProd = env.NODE_ENV === "production";
 
   if (isProd) {

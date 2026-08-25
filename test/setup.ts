@@ -34,3 +34,19 @@ vapid.generateKeys();
 process.env.VAPID_PUBLIC_KEY ??= vapid.getPublicKey().toString("base64url");
 process.env.VAPID_PRIVATE_KEY ??= vapid.getPrivateKey().toString("base64url");
 process.env.VAPID_SUBJECT ??= "mailto:test@example.test";
+
+/**
+ * A fresh rate limiter for every test.
+ *
+ * S-13's buckets are process-global, so without this one suite's twentieth
+ * search would refuse the next suite's first. That is real behaviour in
+ * production — the limits are per process — but in a test it produces a
+ * failure that points at the feature under test rather than at the shared
+ * state, which is exactly what happened when S-13 first landed.
+ */
+const { beforeEach } = await import("vitest");
+const { resetRateLimits } = await import("../api/lib/rate-limit");
+
+beforeEach(() => {
+  resetRateLimits();
+});
