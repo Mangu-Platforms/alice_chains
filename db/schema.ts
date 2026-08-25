@@ -30,6 +30,12 @@ export const users = mysqlTable("users", {
   avatar: text("avatar"),
   status: varchar("status", { length: 100 }).default("Hey there! I'm using Alice Chains."),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  // S-18. Deactivation is reversible and immediate: sessions are revoked and
+  // sign-in is refused while this is set. Erasure is the one-way door below.
+  deactivatedAt: timestamp("deactivatedAt"),
+  // Erasure is two-phase. This marks the request; the purge runs after a grace
+  // period, so an account deleted by mistake can still be recovered.
+  deletionRequestedAt: timestamp("deletionRequestedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()
@@ -317,6 +323,36 @@ export const pushSubscriptions = mysqlTable(
 );
 
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+
+// ─── Audit log (S-18) ─────────────────────────────────────────────────────
+//
+// Append-only: there is no update or delete path anywhere in the codebase, and
+// nothing here references a user, deliberately. An audit trail that cascades
+// away with the account it describes is not an audit trail — so `actorId` and
+// `targetUserId` are plain columns with no foreign key, and survive the purge.
+export const auditLogs = mysqlTable(
+  "audit_logs",
+  {
+    id: serial("id").primaryKey(),
+    actorId: bigint("actorId", { mode: "number", unsigned: true }),
+    action: varchar("action", { length: 64 }).notNull(),
+    targetUserId: bigint("targetUserId", { mode: "number", unsigned: true }),
+    targetType: varchar("targetType", { length: 32 }),
+    targetId: varchar("targetId", { length: 64 }),
+    outcome: mysqlEnum("outcome", ["success", "failure"]).notNull(),
+    // Small, structured, and never message content — the S-15 redactor's rules
+    // apply to what a caller puts here.
+    detail: varchar("detail", { length: 512 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    index("audit_logs_created_idx").on(t.createdAt),
+    index("audit_logs_actor_idx").on(t.actorId, t.createdAt),
+    index("audit_logs_target_idx").on(t.targetUserId, t.createdAt),
+  ]
+);
+
+export type AuditLog = typeof auditLogs.$inferSelect;
 
 // ─── Contacts (Friend relationships) ──────────────────────────────
 export const contacts = mysqlTable(

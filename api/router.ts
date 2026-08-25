@@ -4,6 +4,7 @@ import { messageRouter } from "./message-router";
 import { contactRouter } from "./contact-router";
 import { attachmentRouter } from "./attachment-router";
 import { pushRouter } from "./push-router";
+import { adminRouter } from "./admin-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -14,6 +15,7 @@ export const appRouter = createRouter({
   contact: contactRouter,
   attachment: attachmentRouter,
   push: pushRouter,
+  admin: adminRouter,
 });
 
 export type AppRouter = typeof appRouter;

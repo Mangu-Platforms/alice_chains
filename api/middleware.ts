@@ -38,3 +38,22 @@ export function rateLimited(surface: string, ...policies: BucketPolicy[]) {
     return next();
   });
 }
+
+/**
+ * S-18. A procedure only an administrator may call.
+ *
+ * A builder rather than an inline check at the top of each resolver, so an
+ * administrative procedure cannot be added later and quietly miss its gate —
+ * the requirement is visible in the procedure's own definition.
+ *
+ * With `OWNER_UNION_ID` unset no account is ever promoted, so the deployment
+ * has no administrator and every one of these returns FORBIDDEN. That is the
+ * safe default: an instance that was never told who owns it should not decide
+ * on its own.
+ */
+export const adminQuery = authedQuery.use(({ ctx, next }) => {
+  if (ctx.user.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Administrator access required" });
+  }
+  return next();
+});

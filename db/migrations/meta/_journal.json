@@ -50,6 +50,13 @@
       "when": 1787690302282,
       "tag": "0006_jazzy_blackheart",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1787692771086,
+      "tag": "0007_petite_edwin_jarvis",
+      "breakpoints": true
     }
   ]
 }

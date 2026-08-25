@@ -26,7 +26,15 @@ export async function authenticateRequest(headers: Headers) {
 
     if (sessionData?.unionId) {
       const user = await findUserByUnionId(sessionData.unionId);
-      return user || undefined;
+      if (!user) return undefined;
+
+      // S-18. Checked on every request, not only at sign-in: a member
+      // deactivated mid-session must stop being authenticated immediately,
+      // and revoking their sessions alone would not cover a token minted a
+      // moment before.
+      if (user.deactivatedAt || user.deletionRequestedAt) return undefined;
+
+      return user;
     }
   } catch {
     // Invalid token
@@ -194,6 +202,14 @@ export function createOAuthCallbackHandler() {
       const user = await findUserByUnionId(unionId);
       if (!user) {
         return fail("Failed to create user", 500);
+      }
+
+      // A deactivated or erased account cannot sign back in. Refused after the
+      // upsert rather than before, so the check reads the stored state rather
+      // than trusting anything the provider said.
+      if (user.deactivatedAt || user.deletionRequestedAt) {
+        log.warn("sign-in refused for a deactivated account", { userId: user.id });
+        return fail("This account is not active", 403);
       }
 
       // A fresh session row, and therefore a fresh `sid`, on every sign-in:
