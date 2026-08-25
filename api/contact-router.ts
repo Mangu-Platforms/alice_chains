@@ -1,8 +1,10 @@
 import { z } from "zod";
-import { eq, and, or, sql } from "drizzle-orm";
+import { eq, and, ne, or, sql } from "drizzle-orm";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { contacts, users } from "@db/schema";
+import { MIN_USER_SEARCH_LENGTH, USER_SEARCH_LIMIT } from "@contracts/constants";
+import { escapeLikePattern } from "./lib/sql";
 
 export const contactRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -163,27 +165,43 @@ export const contactRouter = createRouter({
     }),
 
   searchUsers: authedQuery
-    .input(z.object({ query: z.string().min(1) }))
+    .input(
+      z.object({
+        // S-10. A one-character query returned every matching user together
+        // with their e-mail address — a full directory dump. Three characters
+        // is the shortest query that is a lookup rather than an enumeration.
+        query: z.string().trim().min(MIN_USER_SEARCH_LENGTH).max(100),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const db = getDb();
       const userId = ctx.user.id;
+
+      const pattern = `%${escapeLikePattern(input.query)}%`;
 
       const rows = await db
         .select({
           id: users.id,
           name: users.name,
-          email: users.email,
           avatar: users.avatar,
         })
         .from(users)
         .where(
-          or(
-            sql`${users.name} LIKE ${"%" + input.query + "%"}`,
-            sql`${users.email} LIKE ${"%" + input.query + "%"}`
+          and(
+            ne(users.id, userId),
+            or(
+              sql`${users.name} LIKE ${pattern}`,
+              sql`${users.email} LIKE ${pattern}`
+            )
           )
         )
-        .limit(20);
+        .orderBy(users.name)
+        .limit(USER_SEARCH_LIMIT);
 
-      return rows.filter((u) => u.id !== userId);
+      // S-10. `email` is deliberately absent from the projection: a caller who
+      // is not yet a contact has no business learning an address. The column is
+      // still *matched* on, so searching by a known address still finds the
+      // person — it is simply never echoed back.
+      return rows;
     }),
 });

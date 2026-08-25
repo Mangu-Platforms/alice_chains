@@ -16,6 +16,10 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { contacts, conversationParticipants, messages, users } from "@db/schema";
+import { alias } from "drizzle-orm/mysql-core";
+
+/** Second reference to `conversation_participants` for the co-member self-join. */
+const coMember = alias(conversationParticipants, "coMember");
 import { getDb } from "../queries/connection";
 
 type Db = ReturnType<typeof getDb>;
@@ -245,4 +249,50 @@ export async function assertNotBlocked(
       message: "You cannot start a conversation with one of these people",
     });
   }
+}
+
+// ─── Presence scope ───────────────────────────────────────────────────────
+
+/**
+ * Everyone `userId` has a relationship with: accepted contacts in either
+ * direction, plus anyone they share a conversation with.
+ *
+ * Presence used to be `socket.broadcast.emit`, so every signed-in member
+ * learned every other member's online state and each new socket received the
+ * whole online-user list (BUILD_PLAN S-10). This set is the audience instead.
+ * Suppressing presence *between blocked pairs* is F-8; a blocked pair is still
+ * "related" as far as this predicate is concerned.
+ */
+export async function relatedUserIds(
+  userId: number,
+  db: Db = getDb()
+): Promise<Set<number>> {
+  const [contactRows, coMemberRows] = await Promise.all([
+    db
+      .select({ userId: contacts.userId, contactUserId: contacts.contactUserId })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.status, "accepted"),
+          or(eq(contacts.userId, userId), eq(contacts.contactUserId, userId))
+        )
+      ),
+    db
+      .select({ userId: coMember.userId })
+      .from(conversationParticipants)
+      .innerJoin(
+        coMember,
+        eq(coMember.conversationId, conversationParticipants.conversationId)
+      )
+      .where(eq(conversationParticipants.userId, userId)),
+  ]);
+
+  const related = new Set<number>();
+  for (const row of contactRows) {
+    related.add(row.userId === userId ? row.contactUserId : row.userId);
+  }
+  for (const row of coMemberRows) related.add(row.userId);
+  related.delete(userId);
+
+  return related;
 }

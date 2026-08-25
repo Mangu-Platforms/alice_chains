@@ -32,3 +32,12 @@ export const MAX_READ_RECEIPT_BATCH = 500;
  * before S-9, so a single call could write an arbitrary number of rows.
  */
 export const MAX_CONVERSATION_PARTICIPANTS = 256;
+
+/**
+ * Shortest accepted `contact.searchUsers` query. A single character used to be
+ * enough to enumerate the whole user directory, e-mail addresses included.
+ */
+export const MIN_USER_SEARCH_LENGTH = 3;
+
+/** Most rows `contact.searchUsers` will return for one query. */
+export const USER_SEARCH_LIMIT = 20;

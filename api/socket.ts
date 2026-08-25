@@ -4,7 +4,7 @@ import { getDb } from "./queries/connection";
 import { messages, messageReads, conversationParticipants } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { authenticateRequest } from "./kimi/auth";
-import { isParticipant, messagesBelongToConversation } from "./lib/authz";
+import { isParticipant, messagesBelongToConversation, relatedUserIds } from "./lib/authz";
 import { MAX_READ_RECEIPT_BATCH } from "@contracts/constants";
 
 let io: SocketIOServer | null = null;
@@ -18,6 +18,23 @@ export function getIO() {
 
 export function getOnlineUsers() {
   return new Map(Array.from(onlineUsers, ([id, sockets]) => [id, new Set(sockets)]));
+}
+
+/**
+ * Tell exactly the people related to `userId` that their state changed.
+ *
+ * Emitting into each recipient's own `user_{id}` room rather than broadcasting
+ * means an unrelated member never sees the event at all — the fan-out is the
+ * authorization.
+ */
+function announcePresence(
+  userId: number,
+  audience: Iterable<number>,
+  event: "userOnline" | "userOffline"
+) {
+  for (const recipientId of audience) {
+    io?.to(`user_${recipientId}`).emit(event, { userId });
+  }
 }
 
 export function initSocket(server: HttpServer) {
@@ -50,10 +67,26 @@ export function initSocket(server: HttpServer) {
     onlineUsers.set(userId, sockets);
     socket.join(`user_${userId}`);
 
-    if (wasOffline) {
-      socket.broadcast.emit("userOnline", { userId });
-    }
-    socket.emit("onlineUsers", Array.from(onlineUsers.keys()));
+    // S-10. Presence was `socket.broadcast.emit`, so every signed-in member
+    // learned every other member's online state, and each new socket was handed
+    // the complete list of who was online. Both are now scoped to people the
+    // member actually has a relationship with.
+    void (async () => {
+      try {
+        const related = await relatedUserIds(userId);
+
+        socket.emit(
+          "onlineUsers",
+          Array.from(onlineUsers.keys()).filter((id) => related.has(id))
+        );
+
+        if (wasOffline) {
+          announcePresence(userId, related, "userOnline");
+        }
+      } catch (error) {
+        console.error("Error scoping presence:", error);
+      }
+    })();
 
     // Membership is asked of the shared predicate in api/lib/authz.ts so the
     // socket and tRPC doors can never drift apart (BUILD_PLAN S-8).
@@ -203,9 +236,17 @@ export function initSocket(server: HttpServer) {
     socket.on("disconnect", () => {
       const userSockets = onlineUsers.get(userId);
       userSockets?.delete(socket.id);
+
+      // Only the *last* socket for a member takes them offline — several tabs
+      // or devices share one presence entry.
       if (!userSockets?.size) {
         onlineUsers.delete(userId);
-        socket.broadcast.emit("userOffline", { userId });
+
+        // Recomputed rather than cached from connect time, so a relationship
+        // formed during the session is honoured on the way out.
+        void relatedUserIds(userId)
+          .then((related) => announcePresence(userId, related, "userOffline"))
+          .catch((error) => console.error("Error scoping presence:", error));
       }
       console.log("Socket disconnected:", socket.id);
     });
