@@ -4,6 +4,8 @@
 
 **A fast, self-hostable real-time messaging platform.**
 
+Shipping name: **Alisons**. Codebase name until the one-cut rename: Alice Chains. AI guest: **Alice**.
+
 React 19 · tRPC v11 · Hono · Drizzle ORM · MySQL 8 · Socket.IO 4 · TypeScript
 
 [![CI](https://github.com/Mangu-Platforms/alice_chains/actions/workflows/ci.yml/badge.svg)](https://github.com/Mangu-Platforms/alice_chains/actions/workflows/ci.yml)
@@ -15,9 +17,9 @@ React 19 · tRPC v11 · Hono · Drizzle ORM · MySQL 8 · Socket.IO 4 · TypeScr
 
 ## What it is
 
-Alice Chains is a dark-themed, self-hostable chat platform: direct and group conversations, live message delivery over WebSockets, typing indicators, read receipts, presence across multiple devices, and a contacts system with requests and blocking. It signs you in through Kimi OAuth 2.0 and keeps you signed in with an HMAC-SHA256 signed session cookie.
+Alice Chains is a dark-themed, self-hostable **messenger**: direct and group conversations, live message delivery over WebSockets, typing indicators, read receipts, presence across multiple devices, and a contacts system with requests and blocking. It signs you in through Kimi OAuth 2.0 and keeps you signed in with an HMAC-SHA256 signed session cookie.
 
-It is a **Phase 1 platform under active stabilization**. The messaging core is real and works; a set of authorization and integrity defects are documented and being fixed in order. Read [CURRENT_STATUS.md](CURRENT_STATUS.md) before you deploy it anywhere that matters.
+It is a **Phase 1–2 platform under active stabilization**. The messaging core is real and works. Voice/video are icons. End-to-end encryption is parked. Read [CURRENT_STATUS.md](CURRENT_STATUS.md) before you deploy it anywhere that matters. Product bible after the Alisons rename: [ALISONS.md](ALISONS.md).
 
 ## Quick start
 
@@ -73,7 +75,7 @@ docker compose up             # app on http://localhost:3000
 | `npm run check:a11y` | assert every icon-only control has an accessible name |
 | `npm run check:bundle` | assert the initial JS payload against the NFR-PERF-06 budget |
 | `npm run generate-vapid` | generate a VAPID key pair for web push |
-| `npm run db:verify-migration` | prove the constraint migration against a deliberately dirty scratch database — dedupe, orphan handling, and the abort on a RESTRICT orphan |
+| `npm run db:verify-migration` | prove the constraint migration against a deliberately dirty scratch database |
 
 ## Configuration
 
@@ -81,10 +83,10 @@ Copy `.env.example` and fill it in. Every variable is documented there, and in f
 
 Two rules the server enforces at boot rather than trusting you to remember:
 
-- **`APP_SECRET` and `SESSION_SECRET` must be at least 32 characters.** Generate one with `openssl rand -base64 32`. The process refuses to start below that — a one-character HMAC key made every session in the deployment forgeable. (`SESSION_SECRET` was `JWT_SECRET`, a misnomer — sessions are HMAC-signed cookies, not JWTs, per [ADR-002](docs/ADR.md). The old name still works, deprecated, for one release.)
-- **No secret may carry a `VITE_` prefix.** Vite inlines every `VITE_*` variable into the public client bundle, so a prefixed secret is published to every visitor. Startup fails naming the offending variable.
+- **`APP_SECRET` and `SESSION_SECRET` must be at least 32 characters.** Generate one with `openssl rand -base64 32`.
+- **No secret may carry a `VITE_` prefix.**
 
-`KIMI_AUTH_URL` and `PUBLIC_BASE_URL` must be bare origins — no path, no query. The server derives every OAuth endpoint from them and refuses a value carrying a path, naming the corrected one.
+`KIMI_AUTH_URL` and `PUBLIC_BASE_URL` must be bare origins — no path, no query.
 
 ## Tests
 
@@ -93,57 +95,11 @@ npm test                                    # unit tests; integration suites ski
 TEST_DATABASE_URL=mysql://alice:alice_pw@127.0.0.1:3306/alice_chains_test npm test
 ```
 
-Integration and Socket.IO suites need a MySQL database and opt in through `TEST_DATABASE_URL`. Without it they skip rather than fail, so `npm run validate` is green on a machine with no database. See [test/README.md](test/README.md) for which harness layer to reach for.
-
-`docker compose up -d db` provisions `alice_chains_test` automatically via
-`db/init/01-create-test-database.sql`, alongside the dev database — but only
-against a **fresh** volume; MySQL runs `docker-entrypoint-initdb.d` scripts
-once, on first boot. An existing volume from before this script existed needs
-one statement: `docker compose exec db mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e
-"CREATE DATABASE IF NOT EXISTS alice_chains_test; GRANT ALL PRIVILEGES ON
-alice_chains_test.* TO 'alice'@'%';"` (default root password `alice_root`, per
-`docker-compose.yml`).
-
-## Continuous integration
-
-`.github/workflows/ci.yml` runs on every push and pull request. It brings up a MySQL 8.4 service container, applies migrations, then runs the full gate — typecheck → test → lint → build — followed by the migration verifier and a from-zero migration of an empty database. Because `TEST_DATABASE_URL` is set, the integration and socket suites actually run there rather than skipping.
-
-Two things cannot be committed and need a maintainer:
-
-- **Make `validate` a required status check on `main`** (Settings → Branches → branch protection). Until then a red build can still merge. Tracked as S-12b.
-- **Coverage publication** needs `@vitest/coverage-v8`, which changes the lockfile; the working agreement puts that behind an explicit decision. Tracked as S-12a.
-
-| Variable | Required | Notes |
-|---|---|---|
-| `DATABASE_URL` | yes | MySQL 8 connection string |
-| `KIMI_AUTH_URL` | yes | Provider **origin only** — no path, no trailing slash. Server-side only despite the `VITE_KIMI_AUTH_URL` name it had until H-7; that name still works, deprecated |
-| `KIMI_APP_ID` | yes | OAuth client id. Was `VITE_APP_ID`; that name still works, deprecated |
-| `APP_SECRET` | yes | OAuth client secret — server-side only |
-| `SESSION_SECRET` | yes | Session signing key (≥ 32 random bytes). Sessions are HMAC-signed cookies, not JWT — `JWT_SECRET` was the historical name and still works, deprecated (ADR-002) |
-| `SESSION_SECRET_PREVIOUS` | no | Set only mid-rotation: the old key, while `SESSION_SECRET` above holds the new one. Accepted for verification only; never used to sign |
-| `PUBLIC_BASE_URL` | prod | Canonical public origin; required behind any reverse proxy |
-| `PORT` / `API_PORT` | no | 3000 / 3001 |
-
-> ⚠️ Never prefix a secret with `VITE_` — Vite inlines those into the public client bundle.
-
-## Architecture
-
-```
-Browser (React 19 SPA)
-   │  tRPC over HTTP  ──►  /api/trpc      ─┐
-   │  Socket.IO       ──►  /socket.io      ├─►  Hono server  ──►  MySQL 8 (Drizzle)
-   │  OAuth redirect  ──►  /api/oauth/*   ─┘         │
-                                                     └──►  Kimi identity provider
-```
-
-In development Vite serves the client on `:3000` and proxies `/api` and `/socket.io` to the API on `:3001`. In production a single Node process serves the built client and the API on `:3000`.
-
-Details in [docs/TECH_SPEC.md](docs/TECH_SPEC.md); the wire contract in [docs/API_CONTRACT.md](docs/API_CONTRACT.md).
-
 ## Documentation
 
 | Document | What it answers |
 |---|---|
+| [ALISONS.md](ALISONS.md) | **Product bible** — rename, features, pages, feasibility, documents to procure |
 | [CURRENT_STATUS.md](CURRENT_STATUS.md) | What works, what is broken, what was just fixed |
 | [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) | What to build next, in order, with acceptance criteria |
 | [docs/SRS.md](docs/SRS.md) | 164 numbered requirements and their current status |
@@ -161,13 +117,7 @@ Details in [docs/TECH_SPEC.md](docs/TECH_SPEC.md); the wire contract in [docs/AP
 
 Phase 1 (core messaging) is implemented. `npm ci && npm run validate` is green.
 
-Waves 1–3 of [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) have shipped:
-
-- **Wave 1 — authorization.** `message.markAsRead` performed no authorization at all; conversation creation accepted arbitrary user ids and ignored blocking; `contact.searchUsers` returned every match's email on a one-character query; presence was broadcast to every connected socket. All closed, on both the tRPC and Socket.IO paths, through one shared predicate module. OAuth gained `state` and PKCE, and sessions gained a server-side record so logout revokes on every device.
-- **Wave 2 — integrity.** The schema had 0 foreign keys and 0 indexes. It now has 11 foreign keys, 3 unique constraints and 9 indexes, with a migration that dedupes and refuses to guess where a decision belongs to a human. `conversations.updatedAt` is written, so the sidebar is sorted by recency rather than creation order, and unread counts exist.
-- **Wave 3 — tests.** One test became 169 assertions across router, HTTP and two-client Socket.IO layers, running in CI against a real MySQL.
-
-What remains is scheduled in [BACKLOG.md](BACKLOG.md): Wave 4 features (unreads in the UI, edit/delete, reactions, attachments, push, group management, blocking end to end) and Wave 5 hardening (rate limiting, socket payload validation, observability, admin capability, accessibility).
+Waves 1–4 of [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) have shipped, and message-history pagination past 50 messages (H-9) since. Remaining work: split `Chat.tsx`, admin UI, calls beta. See [docs/alisons/GAPS.md](docs/alisons/GAPS.md).
 
 ## Contributing
 
