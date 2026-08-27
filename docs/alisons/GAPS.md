@@ -11,7 +11,7 @@
 | S-20a | Finish the message catalogue | Visible Chat/Contacts copy still inline English |
 | S-12b | Make validate required on main | A red build can still merge |
 | H-7 | Rename misleading env keys | `VITE_KIMI_AUTH_URL` is server-only; `JWT_SECRET` is HMAC |
-| P-TOOL-10 | CONTRIBUTING.md | Humans need a door |
+| P-TOOL-10 | CONTRIBUTING.md | ✅ Done — plus `AGENTS.md` for agents and `docs/README.md` as the index |
 | P-TOOL-6 | Walk SETUP.md as a stranger | If it fails, not self-hostable |
 
 ## Blockers

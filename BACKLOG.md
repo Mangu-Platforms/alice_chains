@@ -99,7 +99,7 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | ✅ Done — and guarded by `test/env-example.test.ts`, which fails in both directions |
 | **P-TOOL-8** | CI required checks documented in README | P2 | ✅ Done — with S-12 |
 | **P-TOOL-9** | `npm run db:seed` — demo data, dev-only guard | P1 | ✅ Done — three members, a DM, a group, and a printed session cookie for each so no OAuth provider is needed |
-| **P-TOOL-10** | CONTRIBUTING.md | P2 | Not started |
+| **P-TOOL-10** | CONTRIBUTING.md | P2 | ✅ Done — plus `AGENTS.md` as the cross-agent operating policy, `docs/README.md` rebuilt as the canonical index, a PR template and Copilot instructions |
 
 ### H — Hygiene (P2, each ≤ 30 min, no behaviour change)
 
