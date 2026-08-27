@@ -1,5 +1,14 @@
 # Alice Chains - Development Notes
 
+> **⚠ Historical — superseded, and partly wrong. Kept for provenance only.**
+>
+> These are the original hand-written development notes. Several commands below are no longer the
+> workflow (`npm run db:push` is scratch-development only; `npm ci` replaces `npm install`; the gate
+> is `npm run validate`). Do not act on this file.
+>
+> **Current:** [docs/SETUP.md](docs/SETUP.md) to run it · [docs/README.md](docs/README.md) for the
+> documentation index · [AGENTS.md](AGENTS.md) if you are an AI coding agent.
+
 ## Project Setup
 
 This project was built using the webapp-building and backend-building skills.

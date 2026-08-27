@@ -191,6 +191,9 @@ npm run validate      # typecheck -> test -> lint -> build
 
 ## 9. Where to go next
 
-* [../CLAUDE.md](../CLAUDE.md) — the working agreement, read before changing anything.
+* [../AGENTS.md](../AGENTS.md) — **AI coding agents start here**: the cross-agent operating policy, read before changing anything.
+* [../CONTRIBUTING.md](../CONTRIBUTING.md) — the human contribution workflow.
+* [README.md](README.md) — the documentation index: which document is authoritative for which question.
+* [../CLAUDE.md](../CLAUDE.md) — Claude-specific additions on top of AGENTS.md.
 * [BUILD_PLAN.md](BUILD_PLAN.md) — what to build next, in order, with acceptance criteria.
 * [../CURRENT_STATUS.md](../CURRENT_STATUS.md) — what is known broken right now.

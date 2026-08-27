@@ -19,8 +19,8 @@ Work **one task at a time, in wave order**. Do not start a task whose dependenci
 | G-2 | One task = one commit = one PR, titled `<TASK-ID>: <summary>`. Never bundle unrelated tasks. |
 | G-3 | Every behavioural change ships with a test that fails before the change and passes after. See [TEST_PLAN.md](TEST_PLAN.md) for the case catalogue and IDs. |
 | G-4 | Never widen scope inside a task. If you discover new work, add it to [BACKLOG.md](../BACKLOG.md) and carry on. |
-| G-5 | Schema changes are forward-only migrations via `npm run db:generate`. `db:push` is scratch-development only ([ADR-005](ADR.md#adr-005)). |
-| G-6 | Do not introduce Supabase, Postgres, Redis, or any new infrastructure dependency without the ADR that authorises it. MySQL is the decision of record ([ADR-001](ADR.md#adr-001)). |
+| G-5 | Schema changes are forward-only migrations via `npm run db:generate`. `db:push` is scratch-development only ([ADR-005](ADR.md#adr-005--drizzle-migrations-are-canonical-dbpush-is-scratch-only)). |
+| G-6 | Do not introduce Supabase, Postgres, Redis, or any new infrastructure dependency without the ADR that authorises it. MySQL is the decision of record ([ADR-001](ADR.md#adr-001--keep-mysql-8-for-this-release-supabasepostgres-is-a-gated-future-migration)). |
 | G-7 | Secrets never carry a `VITE_` prefix — Vite inlines those into the public bundle. |
 | G-8 | If a spec and the code disagree, the spec wins *unless* the code is demonstrably correct; in that case fix the spec in the same PR and note it. |
 

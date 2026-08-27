@@ -1,5 +1,7 @@
 # Test harness
 
+> Part of the documentation set. Index: [`../docs/README.md`](../docs/README.md) · Case catalogue: [`../docs/TEST_PLAN.md`](../docs/TEST_PLAN.md) · Agent policy: [`../AGENTS.md`](../AGENTS.md)
+
 Built by [BUILD_PLAN S-7](../docs/BUILD_PLAN.md#s-7). The repository had one
 test before it; the case catalogue lives in [TEST_PLAN.md](../docs/TEST_PLAN.md).
 

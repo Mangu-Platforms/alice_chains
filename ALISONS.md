@@ -21,4 +21,9 @@ This file is the door. The living product bible lives in [`docs/alisons/`](docs/
 
 **Do not replace `src/pages/Chat.tsx` with a Grok preview shell.** The current stack (Vite + tRPC + Socket.IO + MySQL) is the dogfood messenger. The Grok preview is a future-state UI model only.
 
-Existing authority still holds: `docs/PRD.md`, `docs/SRS.md`, `docs/TECH_SPEC.md`, `docs/BUILD_PLAN.md`, `BACKLOG.md`.
+Existing authority still holds: [`docs/PRD.md`](docs/PRD.md), [`docs/SRS.md`](docs/SRS.md), [`docs/TECH_SPEC.md`](docs/TECH_SPEC.md), [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md), [`BACKLOG.md`](BACKLOG.md).
+
+---
+
+**Where everything else lives:** [`docs/README.md`](docs/README.md) — the documentation index, with each document's audience, authority level and update duty.
+**Building something?** Humans: [`CONTRIBUTING.md`](CONTRIBUTING.md). AI coding agents: [`AGENTS.md`](AGENTS.md), first, before any change.

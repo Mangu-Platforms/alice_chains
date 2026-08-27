@@ -1,5 +1,7 @@
 # Alisons product bible
 
+> Part of the documentation set. Index: [`../README.md`](../README.md) · Root door: [`../../ALISONS.md`](../../ALISONS.md) · Agent policy: [`../../AGENTS.md`](../../AGENTS.md)
+
 Canonical product read for the messenger in this repository after the rename.
 
 Alice Chains is the **codebase**. Alisons is the **product**. Alice is the **AI guest**.
