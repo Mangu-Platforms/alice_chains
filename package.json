@@ -25,7 +25,8 @@
     "db:verify-migration": "node --env-file-if-exists=.env scripts/verify-constraint-migration.mjs",
     "generate-vapid": "node scripts/generate-vapid.mjs",
     "check:bundle": "node scripts/check-bundle-size.mjs",
-    "check:a11y": "node scripts/check-a11y-labels.mjs"
+    "check:a11y": "node scripts/check-a11y-labels.mjs",
+    "check:docs": "node scripts/check-doc-links.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.8",
