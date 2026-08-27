@@ -22,6 +22,14 @@ docker compose up -d db
 DATABASE_URL=mysql://alice:alice_pw@127.0.0.1:3306/alice_chains_test npm run db:migrate
 ```
 
+`docker compose up -d db` creates `alice_chains_test` itself, via
+`db/init/01-create-test-database.sql` — but only on a fresh volume, since MySQL
+runs that script once, at first boot. Before it existed, the command above
+failed on a clean checkout with `ER_BAD_DB_ERROR: Unknown database
+'alice_chains_test'`, because nothing had ever created it (P-TOOL-6); an
+existing volume from before this fix needs the one-off statement in
+[README.md](../README.md#tests).
+
 ## What each layer is for
 
 | Layer | Module | Use it when |

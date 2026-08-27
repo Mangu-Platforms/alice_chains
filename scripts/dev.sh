@@ -44,13 +44,13 @@ if [ ! -f .env ]; then
   # one signing key.
   if command -v openssl >/dev/null; then
     APP=$(openssl rand -base64 32)
-    JWT=$(openssl rand -base64 32)
+    SESSION=$(openssl rand -base64 32)
     # `|` as the delimiter: base64 contains `/` but never `|`.
-    sed -i.bak "s|^APP_SECRET=.*|APP_SECRET=${APP}|; s|^JWT_SECRET=.*|JWT_SECRET=${JWT}|" .env
+    sed -i.bak "s|^APP_SECRET=.*|APP_SECRET=${APP}|; s|^SESSION_SECRET=.*|SESSION_SECRET=${SESSION}|" .env
     rm -f .env.bak
-    ok "Generated APP_SECRET and JWT_SECRET"
+    ok "Generated APP_SECRET and SESSION_SECRET"
   else
-    note "openssl not found — set APP_SECRET and JWT_SECRET yourself:"
+    note "openssl not found — set APP_SECRET and SESSION_SECRET yourself:"
     note "  node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\""
   fi
 

@@ -107,6 +107,14 @@ await freshScratch();
   const db = await connect(SCRATCH);
   for (const file of base) await apply(db, file);
 
+  const countForeignKeys = async () => {
+    const [rows] = await db.query(
+      `SELECT COUNT(*) c FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE()`
+    );
+    return Number(rows[0].c);
+  };
+  const fksBeforeConstraintMigration = await countForeignKeys();
+
   await db.query(
     `INSERT INTO users (unionId, name) VALUES ('u1','Alice'),('u2','Bob'),('u3','Carol')`
   );
@@ -160,10 +168,13 @@ await freshScratch();
   );
   check("dangling replyToId set to NULL", dangling[0]?.replyToId, null);
 
-  const [fks] = await db.query(
-    `SELECT COUNT(*) c FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE()`
-  );
-  check("foreign keys created", Number(fks[0].c), 11);
+  // Asserted as a delta, not an absolute total: `base` includes every migration
+  // but 0002, so later waves adding their own FK-bearing tables (sessions,
+  // reactions, attachments, ...) change the schema-wide total without touching
+  // what 0002 itself is responsible for. 0002 creates exactly 10 — one per
+  // FOREIGN KEY clause in db/migrations/0002_*.sql — regardless of how many
+  // migrations come after it.
+  check("foreign keys created by the constraint migration", (await countForeignKeys()) - fksBeforeConstraintMigration, 10);
 
   // Re-running must be a no-op, not an error.
   try {

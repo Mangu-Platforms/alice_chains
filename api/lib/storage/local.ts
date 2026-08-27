@@ -19,7 +19,7 @@ import {
   DOWNLOAD_URL_TTL_SECONDS,
   UPLOAD_URL_TTL_SECONDS,
 } from "@contracts/attachments";
-import { env } from "../env";
+import { env, sessionSecret } from "../env";
 import { isValidStorageKey } from "./keys";
 import type { StorageDriver, UploadTarget } from "./types";
 
@@ -51,7 +51,12 @@ interface TokenClaims {
 
 function sign(claims: TokenClaims): string {
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
-  const mac = createHmac("sha256", env.JWT_SECRET).update(payload).digest("base64url");
+  // H-7. Not the session cookie's dual-key rotation grace period: these
+  // tokens live at most an hour (`DOWNLOAD_URL_TTL_SECONDS`), so a signing-key
+  // change simply invalidates any that have not yet expired rather than
+  // needing a `_PREVIOUS` key to bridge — the same trade the secret already
+  // makes for every other holder of a stale token today.
+  const mac = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
   return `${payload}.${mac}`;
 }
 
@@ -60,7 +65,7 @@ export function verifyStorageToken(token: string, op: "put" | "get"): TokenClaim
   const [payload, supplied] = token.split(".");
   if (!payload || !supplied) return undefined;
 
-  const expected = createHmac("sha256", env.JWT_SECRET).update(payload).digest("base64url");
+  const expected = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
   const a = Buffer.from(supplied);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return undefined;

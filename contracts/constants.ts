@@ -66,8 +66,9 @@ export const MIN_USER_SEARCH_LENGTH = 3;
 export const USER_SEARCH_LIMIT = 20;
 
 /**
- * Shortest accepted `APP_SECRET` / `JWT_SECRET`. `api/lib/env.ts` accepted a
- * single character until S-17, which made every session forgeable.
+ * Shortest accepted `APP_SECRET` / `SESSION_SECRET` (`JWT_SECRET` until H-7).
+ * `api/lib/env.ts` accepted a single character until S-17, which made every
+ * session forgeable.
  */
 export const MIN_SECRET_LENGTH = 32;
 

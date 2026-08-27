@@ -70,6 +70,8 @@ docker compose up             # app on http://localhost:3000
 | `npm run db:push` | sync schema without a migration — **scratch development only** |
 | `npm run db:studio` | Drizzle Studio |
 | `npm run db:seed` | demo members, a direct conversation and a group, plus a working session cookie for each — **local databases only** |
+| `npm run reset:dev` | **destructive** — wipe the local database (and, unless `SKIP_DB=1`, the Docker volumes) and re-migrate. Refuses on a remote `DATABASE_URL`, names what it will destroy, asks you to type `reset` |
+| `npm run compose:up` / `compose:down` / `compose:logs` | bring the Docker Compose stack up, down, or tail its logs |
 | `npm run check:a11y` | assert every icon-only control has an accessible name |
 | `npm run check:bundle` | assert the initial JS payload against the NFR-PERF-06 budget |
 | `npm run generate-vapid` | generate a VAPID key pair for web push |
@@ -81,10 +83,10 @@ Copy `.env.example` and fill it in. Every variable is documented there, and in f
 
 Two rules the server enforces at boot rather than trusting you to remember:
 
-- **`APP_SECRET` and `JWT_SECRET` must be at least 32 characters.** Generate one with `openssl rand -base64 32`.
+- **`APP_SECRET` and `SESSION_SECRET` must be at least 32 characters.** Generate one with `openssl rand -base64 32`.
 - **No secret may carry a `VITE_` prefix.**
 
-`VITE_KIMI_AUTH_URL` and `PUBLIC_BASE_URL` must be bare origins — no path, no query.
+`KIMI_AUTH_URL` and `PUBLIC_BASE_URL` must be bare origins — no path, no query.
 
 ## Tests
 
@@ -115,11 +117,11 @@ TEST_DATABASE_URL=mysql://alice:alice_pw@127.0.0.1:3306/alice_chains_test npm te
 
 Phase 1 (core messaging) is implemented. `npm ci && npm run validate` is green.
 
-Waves 1–4 of [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) have shipped. Remaining work: pagination past 50 messages, split `Chat.tsx`, admin UI, calls beta. See [docs/alisons/GAPS.md](docs/alisons/GAPS.md).
+Waves 1–4 of [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) have shipped, and message-history pagination past 50 messages (H-9) since. Remaining work: split `Chat.tsx`, admin UI, calls beta. See [docs/alisons/GAPS.md](docs/alisons/GAPS.md).
 
 ## Contributing
 
-`npm run validate` must be green. One task, one commit, one PR. Tests accompany behavioural changes. See [CLAUDE.md](CLAUDE.md) for the full working agreement.
+`npm run validate` must be green. One task, one commit, one PR. Tests accompany behavioural changes. [CONTRIBUTING.md](CONTRIBUTING.md) is the entry point for a human contributor; [CLAUDE.md](CLAUDE.md) is the full working agreement, written for agentic contributions but binding on everyone.
 
 ## License
 

@@ -91,15 +91,15 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | ID | Title | Pri | Status |
 |---|---|---|---|
 | **P-TOOL-1** | `scripts/dev.sh` — compose db, migrate, dev | P1 | ✅ Done — and fixed the fact that nothing loaded `.env` |
-| **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | Not started |
+| **P-TOOL-2** | `scripts/reset-dev.sh` — destructive local reset, guarded | P2 | ✅ Done — shares the tested local-database predicate from P-TOOL-9, refuses on a remote `DATABASE_URL`, names what it destroys, and requires typing `reset` |
 | **P-TOOL-3** | `/healthz` and `/readyz` (readiness touches MySQL) | P1 | ✅ Done — with S-15 |
 | **P-TOOL-4** | Structured logs with request id, no bodies, no secrets | P1 | ✅ Done — with S-15 |
-| **P-TOOL-5** | npm scripts for every operator task | P2 | Not started |
-| **P-TOOL-6** | Follow SETUP.md as a stranger; fix what fails | P1 | Not started |
+| **P-TOOL-5** | npm scripts for every operator task | P2 | ✅ Done — `dev:up`, `reset:dev`, `compose:up`/`compose:up:s3`/`compose:down`/`compose:logs` added alongside the existing validate/dev/migrate scripts |
+| **P-TOOL-6** | Follow SETUP.md as a stranger; fix what fails | P1 | ✅ Done — found and fixed: `docker compose up -d db` never created `alice_chains_test`, so the documented test command failed with `Unknown database` on a genuinely fresh checkout |
 | **P-TOOL-7** | `.env.example` complete with generate-secret one-liner | P1 | ✅ Done — and guarded by `test/env-example.test.ts`, which fails in both directions |
 | **P-TOOL-8** | CI required checks documented in README | P2 | ✅ Done — with S-12 |
 | **P-TOOL-9** | `npm run db:seed` — demo data, dev-only guard | P1 | ✅ Done — three members, a DM, a group, and a printed session cookie for each so no OAuth provider is needed |
-| **P-TOOL-10** | CONTRIBUTING.md | P2 | Not started |
+| **P-TOOL-10** | CONTRIBUTING.md | P2 | ✅ Done |
 
 ### H — Hygiene (P2, each ≤ 30 min, no behaviour change)
 
@@ -114,9 +114,12 @@ Work top to bottom. Do not start a task whose dependency is unmet. A task is don
 | **S-12b** | Make `validate` a required status check on `main`. This is a GitHub branch-protection setting, not a file in the repository, so it cannot be committed — a maintainer sets it in Settings → Branches | Not started |
 | **S-20a** | Migrate the remaining display strings in `Chat.tsx` and `Contacts.tsx` into `src/i18n/en.ts`. S-20 established the catalogue and moved everything a screen reader *announces*; the rest is a mechanical sweep best done file by file rather than as one large risky diff | Not started |
 | **H-8** | `messages.createdAt` / `lastReadAt` were `TIMESTAMP` without fractional seconds, and MySQL *rounds* — so a message sent in the same second as a read counted as already read | ✅ Done — widened to `timestamp(3)` with `now(3)` defaults (migration 0008) |
-| **H-7** | `VITE_KIMI_AUTH_URL` and `VITE_APP_ID` are read on the server only — since S-4 the client builds no provider URL — so the `VITE_` prefix is now misleading. Rename to `KIMI_AUTH_URL`/`KIMI_APP_ID` keeping backwards compatibility, alongside the `JWT_SECRET` → `SESSION_SECRET` rename ([ADR-002](docs/ADR.md)) | Not started |
-| **H-9** | The thread renders a fixed most-recent 50 messages with no way to load older ones — `message.listByConversation` takes `limit`/`offset` and the client passes `limit: 50` and never moves. So a conversation longer than 50 messages is silently truncated, and P-UX-4's jump-to-message has to tell the member when a search hit is further back than the loaded window rather than going to it. Found while building P-UX-4 | Not started |
+| **H-7** | `VITE_KIMI_AUTH_URL`/`VITE_APP_ID` → `KIMI_AUTH_URL`/`KIMI_APP_ID`; `JWT_SECRET` → `SESSION_SECRET` ([ADR-002](docs/ADR.md)) | ✅ Done — both dual-read with a one-time deprecation warning, secret value unchanged so no session invalidates; `SESSION_SECRET_PREVIOUS` rotation support shipped in the same PR per `TECH_SPEC.md §8.5` |
+| **H-9** | The thread renders a fixed most-recent 50 messages with no way to load older ones | ✅ Done — a "Load older messages" control, scroll position preserved across the load, and P-UX-4's jump-to-message now paginates further back before giving up |
 | **H-6** | `.env.example` ships `NODE_ENV=development`, so a `cp .env.example .env` followed by `npm run build` emits a **development** React bundle — 839 KB instead of 597 KB, with dev warnings shipped to users. Found while verifying S-8. Make `npm run build` force `NODE_ENV=production` | ✅ Done |
+| **H-10** | `npm audit` reports a high-severity SQL-injection advisory in `drizzle-orm` ([GHSA-gpj5-g38j-94v9](https://github.com/advisories/GHSA-gpj5-g38j-94v9), CVSS 7.5, CWE-89) on the installed `^0.40.0` range — unescaped identifier delimiters in `sql.identifier()`/dynamic `.as()`. Grepped the whole repo: neither is used anywhere, so this app is not currently exploitable through it. Fix is `drizzle-orm@^0.45.2` (per the advisory, not a breaking change for static schema/query-builder usage, which is all this codebase does), but it's a lockfile change outside the declared semver range (`npm audit fix --force`), so per the S-12a precedent it needs a maintainer's explicit go-ahead rather than a unilateral `npm install` | Not started — flagged for maintainer |
+| **H-11** | `npm audit` also reports a moderate advisory ([GHSA-67mh-4wv8-2f99](https://github.com/advisories/GHSA-67mh-4wv8-2f99), CVSS 5.3, CWE-346) in `esbuild <=0.24.2`, pulled in transitively by `drizzle-kit`'s bundled `@esbuild-kit/core-utils` — lets any website send requests to and read responses from esbuild's *dev server*. `drizzle-kit` is dev-only tooling never deployed, so this doesn't reach production, but the fix (`drizzle-kit@0.31.10`, also a semver-major lockfile change) needs the same maintainer sign-off as H-10 | Not started — flagged for maintainer |
+| **H-12** | `npm run db:verify-migration` was red on `main` (undetected — S-12b never made `validate` a required check): it hardcoded the expected total foreign-key count as `11`, accurate only when migration `0002` (S-3) was the newest migration. Waves 3–5 each added their own FK-bearing tables since, bringing the real total to `17`; migration `0002` itself still correctly creates its own 10. Found while investigating a CI failure on this branch | ✅ Done — the check now asserts `0002`'s own delta (10) instead of a hardcoded absolute total, so it can't go stale again when a later migration adds more FKs. Fixed and merged independently in [PR #6](https://github.com/Mangu-Platforms/alice_chains/pull/6); ported here to unblock this branch's own `validate` gate |
 
 ---
 

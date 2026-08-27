@@ -18,7 +18,7 @@ import { and, eq, isNull, lt } from "drizzle-orm";
 import { Session } from "@contracts/constants";
 import { sessions } from "@db/schema";
 import { getDb } from "../queries/connection";
-import { env } from "../lib/env";
+import { sessionSecret, sessionSecretPrevious } from "../lib/env";
 import { parseSessionToken } from "../lib/cookies";
 import type { SessionData } from "./types";
 
@@ -30,8 +30,46 @@ function encode(value: string) {
   return Buffer.from(value).toString("base64url");
 }
 
-function signature(payload: string) {
-  return createHmac("sha256", env.JWT_SECRET).update(payload).digest("base64url");
+/** Sign with the current key only — never the previous one (docs/SECURITY.md §10 item 4). */
+function signature(payload: string): string {
+  return createHmac("sha256", sessionSecret).update(payload).digest("base64url");
+}
+
+/**
+ * Every key a signature may currently verify against: the current key, and —
+ * during a rotation window — the previous one, so a token signed just before
+ * a rotation is not rejected the moment it happens.
+ *
+ * Order matters only for cost, not correctness: the current key is checked
+ * first because it is the common case.
+ */
+function verificationKeys(): readonly string[] {
+  return sessionSecretPrevious ? [sessionSecret, sessionSecretPrevious] : [sessionSecret];
+}
+
+/**
+ * Whether `supplied` is a valid HMAC-SHA256 signature of `payload` under any
+ * of `keys`, each compared in constant time. A pure function over its
+ * arguments rather than reading the configured keys itself, so the rotation
+ * behavior — accept the old key, sign only with the new one — is testable
+ * without needing a second process configured with different environment
+ * variables.
+ */
+export function verifySignatureAgainstKeys(
+  payload: string,
+  supplied: string,
+  keys: readonly string[]
+): boolean {
+  const suppliedBytes = Buffer.from(supplied);
+  return keys.some((key) => {
+    const expectedBytes = Buffer.from(
+      createHmac("sha256", key).update(payload).digest("base64url")
+    );
+    return (
+      suppliedBytes.length === expectedBytes.length &&
+      timingSafeEqual(suppliedBytes, expectedBytes)
+    );
+  });
 }
 
 /** A hash of the user agent — never the header itself. */
@@ -79,10 +117,7 @@ export function decodeSessionToken(token: string): SessionData | undefined {
   const [payload, supplied] = token.split(".");
   if (!payload || !supplied) return undefined;
 
-  const expected = signature(payload);
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return undefined;
+  if (!verifySignatureAgainstKeys(payload, supplied, verificationKeys())) return undefined;
 
   let session: SessionData;
   try {

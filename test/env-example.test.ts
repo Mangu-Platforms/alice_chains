@@ -25,7 +25,17 @@ const SOURCE_DIRS = ["api", "db", "src", "scripts", "contracts", "test"];
  * already documents; anything else here is a deliberate omission with a reason
  * next to it.
  */
-const NOT_DOCUMENTED = new Set<string>([]);
+const NOT_DOCUMENTED = new Set<string>([
+  // H-7. Deprecated aliases the schema still accepts for backward
+  // compatibility (ADR-002's migration path) — deliberately absent from the
+  // file a new deployment copies, so a stranger is never invited to set a
+  // name that is going away. `KIMI_AUTH_URL`/`KIMI_APP_ID`/`SESSION_SECRET`
+  // are what .env.example documents instead; env.ts's own comments explain
+  // the rename and the fallback.
+  "VITE_KIMI_AUTH_URL",
+  "VITE_APP_ID",
+  "JWT_SECRET",
+]);
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];

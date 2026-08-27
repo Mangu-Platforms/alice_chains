@@ -733,7 +733,7 @@ Additionally, **10 of 28 tasks** close requirements only by inference — `S-0`,
 | FR-SESS-02 | TC-AUTH-17 † | `Secure` + `SameSite=Lax` in production (SEC-C-07) | **TC-AUTH-17** — the id was correct; only the `†` marker was wrong |
 | FR-SESS-03 | TC-AUTH-18 † | logout → reuse cookie → `UNAUTHORIZED` (SEC-C-05) | **TC-AUTH-36 †** — genuinely new: nothing asserts the `__Host-` name prefix |
 | FR-SESS-06 | TC-AUTH-33 † | `redirect_uri` derivation (SEC-C-02) | **TC-AUTH-18** — the revocation case |
-| FR-SESS-07 | TC-AUTH-34 † | `envSchema.parse({JWT_SECRET:"a"})` throws (SEC-C-24) | **TC-AUTH-37 †** — genuinely new: nothing asserts idle expiry |
+| FR-SESS-07 | TC-AUTH-34 † | `envSchema.parse({SESSION_SECRET:"a"})` throws (SEC-C-24; `JWT_SECRET` until H-7) | **TC-AUTH-37 †** — genuinely new: nothing asserts idle expiry |
 | FR-SESS-09 | TC-SOCK-25 † | *free, but the case it described already existed* | **TC-SOCK-24** — socket session re-validation (SEC-C-29) |
 | FR-SESS-10 | TC-REG-14 † | 2 MB body → 413 (SEC-C-20) | **TC-REG-19 †** — genuinely new |
 | FR-CONV-08 | TC-CONV-11 † | `createGroup` with a non-existent participant id (SEC-C-11) | **TC-CONV-11** — the id was correct; only the `†` marker was wrong |
@@ -755,7 +755,7 @@ Additionally, **10 of 28 tasks** close requirements only by inference — `S-0`,
 | NFR-SEC-05 | TC-CONT-12 † | blocked pair → `FORBIDDEN` | **TC-CONT-17** — no `email` in search results |
 | NFR-SEC-06 | TC-REG-13 † | `VITE_` prefix guard (SEC-C-24) | **TC-REG-15** — CSP, HSTS, `X-Content-Type-Options`, `Referrer-Policy` |
 | NFR-SEC-07 | TC-SOCK-23/24 † | rate limiting; socket session re-validation | **TC-SOCK-23** — 100 sends in 1 s, `rateLimited` |
-| NFR-SEC-08 | TC-AUTH-32 † | origin-only assertion (SEC-C-01) | **TC-AUTH-34** — `JWT_SECRET: "a"` throws (min 32) |
+| NFR-SEC-08 | TC-AUTH-32 † | origin-only assertion (SEC-C-01) | **TC-AUTH-34** — `SESSION_SECRET: "a"` throws (min 32; `JWT_SECRET` until H-7) |
 | NFR-SEC-10 | TC-CONT-12 † | blocked pair → `FORBIDDEN` | **TC-CONT-17** — no `email` in search results |
 | NFR-SEC-11 | TC-REG-16 † | *free, but the case it described already existed* | **TC-REG-14** — 2 MB body → 413 after SEC-C-20 |
 

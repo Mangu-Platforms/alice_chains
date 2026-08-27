@@ -11,6 +11,12 @@ services:
       - "3306:3306"
     volumes:
       - db_data:/var/lib/mysql
+      # Runs once against an empty data directory: provisions the test
+      # database `TEST_DATABASE_URL` names, which `MYSQL_DATABASE` above does
+      # not (P-TOOL-6). Only the app's default user/password are handled —
+      # see the script's own comment for what to do if you have overridden
+      # MYSQL_USER.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-alice_root}"]
       interval: 5s
@@ -83,11 +89,18 @@ services:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: mysql://${MYSQL_USER:-alice}:${MYSQL_PASSWORD:-alice_pw}@db:3306/${MYSQL_DATABASE:-alice_chains}
-      VITE_KIMI_AUTH_URL: ${VITE_KIMI_AUTH_URL:?set VITE_KIMI_AUTH_URL in .env}
-      VITE_APP_ID: ${VITE_APP_ID:?set VITE_APP_ID in .env}
+      # H-7. Read on the server only, both before and after this rename — the
+      # names have never carried anything the client uses. The nested default
+      # keeps a .env that only sets the deprecated VITE_ name working with no
+      # operator change required (ADR-002's migration path); the app's own
+      # fallback in api/lib/env.ts does the same for a non-compose deployment.
+      KIMI_AUTH_URL: ${KIMI_AUTH_URL:-${VITE_KIMI_AUTH_URL:?set KIMI_AUTH_URL (or the deprecated VITE_KIMI_AUTH_URL) in .env}}
+      KIMI_APP_ID: ${KIMI_APP_ID:-${VITE_APP_ID:?set KIMI_APP_ID (or the deprecated VITE_APP_ID) in .env}}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      SESSION_SECRET: ${SESSION_SECRET:-${JWT_SECRET:?set SESSION_SECRET (or the deprecated JWT_SECRET) in .env}}
+      # Optional: set only while rotating SESSION_SECRET (docs/SECURITY.md §10).
+      SESSION_SECRET_PREVIOUS: ${SESSION_SECRET_PREVIOUS:-}
       OWNER_UNION_ID: ${OWNER_UNION_ID:-}
       # Attachments. Defaults to the filesystem so the stack works with no
       # extra services; switch to s3 with the minio profile above.
