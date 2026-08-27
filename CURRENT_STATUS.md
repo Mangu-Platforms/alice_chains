@@ -1,19 +1,19 @@
 # Alice Chains — CURRENT STATUS
 
-## Handoff 2026-08-25
+## Handoff 2026-08-27
 
-**Wave 1 is complete and pushed.** S-8, S-9, S-10, S-4, S-5, S-17 all shipped, one commit each, on `claude/continuous-work-session-dlm16p` → [PR #3](https://github.com/Mangu-Platforms/alice_chains/pull/3) (draft). No unauthorized data path from the audit remains open.
+**Waves 1–7 are complete.** Every task in [BACKLOG.md](BACKLOG.md) is `✅ Done` except three explicitly deferred items (S-12a, S-12b, S-20a — see below) and the gated S-19, plus the parked E2EE/MLS track. No unauthorized data path from the original audit remains open.
 
-- **Gate:** `npm run validate` green. **114 tests** across 7 files, up from 1.
-- **Test infrastructure now exists.** MySQL-backed integration fixtures behind `TEST_DATABASE_URL` (`test/support/db.ts`) and a real Socket.IO harness that boots `initSocket` and connects clients with genuine signed session cookies (`test/support/socket.ts`). Suites skip when `TEST_DATABASE_URL` is unset, so the gate stays green without a database — **CI has no MySQL service yet, so Wave 1's proofs do not run there until S-12.** That is the single biggest open risk.
-- **Every behavioural fix was red-proofed** by disabling the guard and re-running: 5 tests for S-8, 7 for S-9, 9 for S-10, 2 for S-5.
-- **New:** `api/lib/authz.ts` (all membership + blocking predicates), `contracts/oauth.ts` (endpoint contract), `api/lib/cookies.ts` (the only `Set-Cookie` emitter), `api/kimi/pkce.ts`, `sessions` table (migration 0001).
-- **Deleted:** `api/lib/http.ts` and the duplicate `getSessionCookieOptions` (H-2, absorbed by S-17).
-- **Spec corrected in place:** SECURITY.md SEC-C-08 named a cookie-helper placement written before S-4 existed; the deviation and its reason are recorded there.
+- **Gate:** `npm run validate` green, including with `TEST_DATABASE_URL` set (integration and socket suites run rather than skip). **525 tests** across 35 files.
+- **PR history:** [PR #3](https://github.com/Mangu-Platforms/alice_chains/pull/3) ("Waves 1–5: authorization, integrity, tests, Phase 2 features, hardening") **merged** into `main` on 2026-08-25. Work continued on the same branch name after that merge (Wave 6/7 product-completeness and operator-tooling tasks, plus H-7/H-9); those commits were rebased onto the post-merge `main` and opened as a new draft, [PR #5](https://github.com/Mangu-Platforms/alice_chains/pull/5), since a merged PR cannot track further commits.
+- **What's in PR #5:** P-TOOL-2/5 (guarded destructive reset + operator npm scripts), P-TOOL-10 (`CONTRIBUTING.md`), P-TOOL-6 (fixed a real defect: `docker compose up -d db` never provisioned `alice_chains_test`, so the documented test command failed on a genuinely clean checkout), H-9 (message-history pagination with scroll-position preservation), H-7 (`VITE_KIMI_AUTH_URL`/`VITE_APP_ID`/`JWT_SECRET` → `KIMI_AUTH_URL`/`KIMI_APP_ID`/`SESSION_SECRET` per ADR-002, dual-read with deprecation warning, `SESSION_SECRET_PREVIOUS` rotation support).
+- **Remaining backlog, all intentionally not one-shot tasks:**
+  - **S-12a** — publish coverage in CI; needs a lockfile change (`@vitest/coverage-v8`), left for maintainer approval rather than an unauthorized `npm install`.
+  - **S-12b** — make `validate` a required GitHub branch-protection check; not a committable file change, a maintainer sets it in Settings → Branches.
+  - **S-19** — Socket.IO Redis adapter for horizontal scale; gated behind the ADR-006 trigger metric, which has not fired.
+  - **S-20a** — sweep remaining display strings in `Chat.tsx`/`Contacts.tsx` into the i18n catalogue; explicitly an incremental "as files are touched" practice, not a single diff.
 
-**Next:** Wave 2 — S-3 (foreign keys, uniques, indexes per DATA_MODEL §3–§4), then S-11. Then Wave 3 (S-7, S-12) which is what puts these proofs in CI.
-
-**Local dev note:** this session runs MySQL 8.0.46 installed directly (no Docker daemon in the sandbox), databases `alice_chains` and `alice_chains_test`, user `alice`/`alice_pw`.
+**Local dev note:** this session runs MySQL 8.0.46 installed directly (no Docker daemon in the sandbox), databases `alice_chains` and `alice_chains_test`, user `alice`/`alice_pw`. A container restart stops that MySQL process; restart it with `sudo service mysql start` before running integration tests, and remember `db:migrate` only reads `DATABASE_URL` — point it at `TEST_DATABASE_URL`'s value to migrate the test database separately (see `.github/workflows/ci.yml` for the pattern CI uses).
 
 ---
 
