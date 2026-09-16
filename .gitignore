@@ -33,3 +33,7 @@ tmp
 
 # F-4 local attachment storage (STORAGE_DRIVER=local)
 /storage/
+
+# Accidental workspace dumps — product source lives in apps/studio/
+latestbuilds.zip
+*.workspace.zip

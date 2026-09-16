@@ -1,5 +1,30 @@
 # Alice Chains — CURRENT STATUS
 
+## Handoff 2026-09-16
+
+**Read this section first.** The 2026-08-12 body below still describes a broken clone. That is history. Waves 0–6 of [BACKLOG.md](BACKLOG.md) have shipped. `npm ci && npm run validate` is the gate.
+
+**What this product is:** Alisons (shipping name) / Alice Chains (repo name until the one-cut rename). A self-hostable messenger. AI guest: Alice. Not a music app.
+
+**What works (Track A, dogfood):** real-time DMs and groups, contacts, blocking, attachments, reactions, edit/soft-delete, search, web push, unread, profile, group management, admin tRPC (no `/admin` screen), PKCE sessions, FKs/indexes, rate limits, structured logs, `/healthz` + `/readyz`.
+
+**What does not:** pagination past 50 messages (H-9), Chat.tsx is still ~81 KB (GOD), no admin UI, call buttons are stubs, server reads plaintext, Alice is docs-only, Kimi is the only IdP, CURRENT_STATUS below is stale, `latestbuilds.zip` was a mistaken binary upload.
+
+**Future-state UI:** extracted from that zip into [`apps/studio/`](apps/studio/README.md). Live model: https://ivory-oasis-orchid-urban.grok.me/ — one room, not a left-nav. Do not replace `src/pages/Chat.tsx` with it.
+
+**Next 14 days (from [docs/alisons/GAPS.md](docs/alisons/GAPS.md)):**
+
+1. H-9 — paginate history past 50
+2. Split Chat.tsx (inbox / thread / composer / inspector)
+3. `/admin` for S-18
+4. This file's 2026-08-12 body archived or rewritten in place (this handoff is the start)
+5. Brand pass toward Alisons (cookie, session, mark — one cut, not a drip)
+6. Walk `docs/SETUP.md` as a stranger
+
+**Do not start:** E2EE on MySQL, native apps, a 14-month rewrite, selling MANAGED/SSO as the first SKU.
+
+---
+
 ## Handoff 2026-08-25
 
 **Wave 1 is complete and pushed.** S-8, S-9, S-10, S-4, S-5, S-17 all shipped, one commit each, on `claude/continuous-work-session-dlm16p` → [PR #3](https://github.com/Mangu-Platforms/alice_chains/pull/3) (draft). No unauthorized data path from the audit remains open.

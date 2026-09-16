@@ -1,0 +1,61 @@
+export type Doc = {
+  order: number;
+  phase: string;
+  name: string;
+  why: string;
+  have: "in-repo" | "stale" | "missing";
+  source?: string;
+};
+
+export const DOCUMENTS: Doc[] = [
+  { order: 1, phase: "0 · Identity", name: "Product thesis (one sentence)", why: "Without this every later doc argues with itself.", have: "in-repo", source: "PRD vision + Track B §1.1" },
+  { order: 2, phase: "0 · Identity", name: "Naming & trademark opinion — Alisons", why: "You cannot ship a rename on hope.", have: "missing" },
+  { order: 3, phase: "0 · Identity", name: "Brand identity system", why: "Mark, type, color, voice. This preview is a draft of that.", have: "missing" },
+  { order: 4, phase: "0 · Identity", name: "Competitive teardown", why: "Slack, Discord, Mattermost, Signal, WhatsApp. Already sketched.", have: "in-repo", source: "docs/PRD.md" },
+  { order: 5, phase: "1 · Product", name: "PRD", why: "What it is, who it is for, what Phase 1–4 means.", have: "in-repo", source: "docs/PRD.md" },
+  { order: 6, phase: "1 · Product", name: "SRS (164 requirements)", why: "The contract for what. Status must be re-baselined against Wave 4.", have: "stale", source: "docs/SRS.md" },
+  { order: 7, phase: "1 · Product", name: "Jobs-to-be-done interview set", why: "Ten trusted-group interviews. The PRD is desk research.", have: "missing" },
+  { order: 8, phase: "1 · Product", name: "Information architecture", why: "Every page, subpage, popup. This app is the first IA.", have: "missing" },
+  { order: 9, phase: "1 · Product", name: "User stories & acceptance criteria", why: "Traceable to SRS ids. BUILD_PLAN has task cards; stories are thinner.", have: "in-repo", source: "docs/BUILD_PLAN.md" },
+  { order: 10, phase: "1 · Product", name: "UX flows (sign-in, first room, call, Alice admit)", why: "Cannot build the iPhone from a Chat.tsx dump.", have: "missing" },
+  { order: 11, phase: "1 · Product", name: "Design system spec", why: "Tokens, type, motion, components. PRD still specifies violet glassmorphism.", have: "stale", source: "docs/PRD.md §UI" },
+  { order: 12, phase: "2 · Architecture", name: "Architecture decision records", why: "Why MySQL, why cookies, why MLS is deferred.", have: "in-repo", source: "docs/ADR.md" },
+  { order: 13, phase: "2 · Architecture", name: "Technical specification", why: "How it is built on the current stack.", have: "in-repo", source: "docs/TECH_SPEC.md" },
+  { order: 14, phase: "2 · Architecture", name: "Data model", why: "Tables, FKs, indexes, migrations.", have: "in-repo", source: "docs/DATA_MODEL.md" },
+  { order: 15, phase: "2 · Architecture", name: "API contract", why: "Normative tRPC + socket events.", have: "in-repo", source: "docs/API_CONTRACT.md" },
+  { order: 16, phase: "2 · Architecture", name: "Threat model / SECURITY.md", why: "STRIDE + control catalogue.", have: "in-repo", source: "docs/SECURITY.md" },
+  { order: 17, phase: "2 · Architecture", name: "Encryption architecture (MLS)", why: "Device keys, epochs, archive limits. Track B is the draft.", have: "stale", source: "docs/ALICE_CHAINS_END_TO_END_PRODUCT_BUILDOUT.md" },
+  { order: 18, phase: "2 · Architecture", name: "AI participant policy", why: "What Alice may read, retain, and say. Legal and product.", have: "missing" },
+  { order: 19, phase: "2 · Architecture", name: "WebRTC media architecture", why: "Signaling, TURN, recording policy, SFU vs mesh.", have: "missing" },
+  { order: 20, phase: "3 · Legal", name: "Privacy policy", why: "GDPR Art. 13/14. Cannot collect an email without it.", have: "missing" },
+  { order: 21, phase: "3 · Legal", name: "Terms of service", why: "Contract with the user and the self-hoster.", have: "missing" },
+  { order: 22, phase: "3 · Legal", name: "Acceptable use policy", why: "Abuse, CSAM, spam. Required before public beta.", have: "missing" },
+  { order: 23, phase: "3 · Legal", name: "Data processing agreement", why: "Enterprise customers will not sign without a DPA.", have: "missing" },
+  { order: 24, phase: "3 · Legal", name: "Subprocessor register", why: "If you ever use a cloud AI or TURN vendor.", have: "missing" },
+  { order: 25, phase: "3 · Legal", name: "Cookie / session notice", why: "HMAC cookie is still a cookie.", have: "missing" },
+  { order: 26, phase: "3 · Legal", name: "Vulnerability disclosure policy", why: "Where researchers send bugs. Before any public instance.", have: "missing" },
+  { order: 27, phase: "3 · Legal", name: "Open-source license audit / notices", why: "MIT + dependency licenses. SBOM later.", have: "in-repo", source: "LICENSE" },
+  { order: 28, phase: "3 · Legal", name: "DPIA (GDPR)", why: "Messaging + optional AI is high risk. Do this before EU users.", have: "missing" },
+  { order: 29, phase: "3 · Legal", name: "Records of processing (ROPA)", why: "Art. 30. Operator document for self-host and hosted.", have: "missing" },
+  { order: 30, phase: "3 · Legal", name: "SOC 2 control mapping", why: "Enterprise sales. After the product exists.", have: "missing" },
+  { order: 31, phase: "4 · Build", name: "BUILD_PLAN (task cards)", why: "Canonical execution order.", have: "in-repo", source: "docs/BUILD_PLAN.md" },
+  { order: 32, phase: "4 · Build", name: "BACKLOG", why: "One-line queue. Status more current than CURRENT_STATUS.", have: "in-repo", source: "BACKLOG.md" },
+  { order: 33, phase: "4 · Build", name: "TEST_PLAN", why: "TC-* catalogue and exit criteria.", have: "in-repo", source: "docs/TEST_PLAN.md" },
+  { order: 34, phase: "4 · Build", name: "TRACEABILITY matrix", why: "Requirement → task → test. Re-run after Wave 4.", have: "stale", source: "docs/TRACEABILITY.md" },
+  { order: 35, phase: "4 · Build", name: "Accessibility audit (WCAG 2.2 AA)", why: "S-20 is a baseline, not an audit report.", have: "missing" },
+  { order: 36, phase: "4 · Build", name: "Localization kit", why: "Catalogue exists for English announcements only.", have: "stale", source: "src/i18n/en.ts" },
+  { order: 37, phase: "4 · Build", name: "CONTRIBUTING.md", why: "Human on-ramp. CLAUDE.md is for agents.", have: "missing" },
+  { order: 38, phase: "5 · Operate", name: "Runbooks (10 incidents)", why: "Auth outage, backlog, plaintext leak, token compromise.", have: "missing" },
+  { order: 39, phase: "5 · Operate", name: "Incident response plan", why: "On-call, 72-hour GDPR clock, user comms.", have: "missing" },
+  { order: 40, phase: "5 · Operate", name: "SLO document", why: "PRD has targets. No measured SLOs, no error budget.", have: "missing" },
+  { order: 41, phase: "5 · Operate", name: "Disaster recovery / BCP", why: "RPO/RTO by data class. Region failover.", have: "missing" },
+  { order: 42, phase: "5 · Operate", name: "SBOM + release signing process", why: "Supply chain. Track B Phase 11.", have: "missing" },
+  { order: 43, phase: "5 · Operate", name: "Pentest statement of work", why: "Web, linking, account takeover. Before public beta.", have: "missing" },
+  { order: 44, phase: "5 · Operate", name: "Cryptographic review SOW", why: "MLS integration, not a generic AppSec scan.", have: "missing" },
+  { order: 45, phase: "6 · Ship", name: "Public security white paper", why: "What you promise. What you do not. Mode comprehension.", have: "missing" },
+  { order: 46, phase: "6 · Ship", name: "App Store / Play listings + privacy nutrition", why: "Native is Phase 4. Prepare copy when protocol exists.", have: "missing" },
+  { order: 47, phase: "6 · Ship", name: "Status page policy", why: "How you talk when it is down.", have: "missing" },
+  { order: 48, phase: "6 · Ship", name: "Support playbook", why: "Device revoke, lost access, abuse reports.", have: "missing" },
+  { order: 49, phase: "6 · Ship", name: "Pricing & packaging", why: "Self-host free, hosted seats, TURN costs, Alice spend.", have: "missing" },
+  { order: 50, phase: "6 · Ship", name: "Launch checklist / Gate F", why: "No unresolved high findings, 30-day SLO, export/delete proven.", have: "in-repo", source: "Track B §6 Gate F" },
+];
