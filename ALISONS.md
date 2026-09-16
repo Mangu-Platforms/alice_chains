@@ -21,4 +21,6 @@ This file is the door. The living product bible lives in [`docs/alisons/`](docs/
 
 **Do not replace `src/pages/Chat.tsx` with a Grok preview shell.** The current stack (Vite + tRPC + Socket.IO + MySQL) is the dogfood messenger. The Grok preview is a future-state UI model only.
 
+The extracted model lives in [`apps/studio/`](apps/studio/README.md). Live: [ivory-oasis-orchid-urban.grok.me](https://ivory-oasis-orchid-urban.grok.me/). Spec inside the preview: `/spec/features`.
+
 Existing authority still holds: `docs/PRD.md`, `docs/SRS.md`, `docs/TECH_SPEC.md`, `docs/BUILD_PLAN.md`, `BACKLOG.md`.
